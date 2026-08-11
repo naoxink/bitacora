@@ -1,0 +1,738 @@
+(function () {
+  "use strict";
+
+  var STORAGE_KEY = "bitacora_dias_v1";
+  var DAY_MIN = 1440;
+
+  // ---------------------------------------------------------------
+  // Storage helpers
+  // ---------------------------------------------------------------
+  function loadAll() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Error leyendo localStorage", e);
+      return {};
+    }
+  }
+
+  function saveAll(data) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      return true;
+    } catch (e) {
+      console.error("Error guardando en localStorage", e);
+      showToast("No se pudo guardar. ¿Espacio lleno?");
+      return false;
+    }
+  }
+
+  function getEntries(dateStr) {
+    var all = loadAll();
+    var list = all[dateStr] || [];
+    return list.slice().sort(function (a, b) {
+      return toMin(a.start) - toMin(b.start);
+    });
+  }
+
+  function saveEntries(dateStr, entries) {
+    var all = loadAll();
+    if (entries.length === 0) {
+      delete all[dateStr];
+    } else {
+      all[dateStr] = entries;
+    }
+    saveAll(all);
+  }
+
+  function addEntry(dateStr, entry) {
+    var entries = getEntries(dateStr);
+    entries.push(entry);
+    saveEntries(dateStr, entries);
+  }
+
+  function deleteEntry(dateStr, id) {
+    var entries = getEntries(dateStr).filter(function (e) { return e.id !== id; });
+    saveEntries(dateStr, entries);
+  }
+
+  function updateEntry(dateStr, id, changes) {
+    var entries = getEntries(dateStr).map(function (e) {
+      if (e.id === id) return Object.assign({}, e, changes);
+      return e;
+    });
+    saveEntries(dateStr, entries);
+  }
+
+  function allTaskNames() {
+    var all = loadAll();
+    var set = {};
+    Object.keys(all).forEach(function (d) {
+      all[d].forEach(function (e) {
+        if (e.task) set[e.task] = true;
+      });
+    });
+    return Object.keys(set).sort(function (a, b) { return a.localeCompare(b, "es"); });
+  }
+
+  // ---------------------------------------------------------------
+  // Time helpers
+  // ---------------------------------------------------------------
+  function toMin(hhmm) {
+    if (!hhmm) return 0;
+    var parts = hhmm.split(":");
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+  }
+
+  function toHHMM(min) {
+    min = ((min % DAY_MIN) + DAY_MIN) % DAY_MIN;
+    var h = Math.floor(min / 60);
+    var m = min % 60;
+    return pad2(h) + ":" + pad2(m);
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+  function fmtDuration(min) {
+    var h = Math.floor(min / 60);
+    var m = min % 60;
+    if (h === 0) return m + "m";
+    if (m === 0) return h + "h";
+    return h + "h " + m + "m";
+  }
+
+  function todayStr() {
+    return dateToStr(new Date());
+  }
+
+  function dateToStr(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  }
+
+  function strToDate(s) {
+    var parts = s.split("-").map(Number);
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function addDays(dateStr, delta) {
+    var d = strToDate(dateStr);
+    d.setDate(d.getDate() + delta);
+    return dateToStr(d);
+  }
+
+  function nowRounded5() {
+    var d = new Date();
+    var min = d.getHours() * 60 + d.getMinutes();
+    min = Math.round(min / 5) * 5;
+    return toHHMM(min);
+  }
+
+  // ---------------------------------------------------------------
+  // Segment / aggregate computation
+  // ---------------------------------------------------------------
+  function computeDaySegments(entries) {
+    var valid = entries
+      .filter(function (e) { return toMin(e.start) < toMin(e.end); })
+      .sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
+
+    var segs = [];
+    var cursor = 0;
+    valid.forEach(function (e) {
+      var s = toMin(e.start);
+      var en = toMin(e.end);
+      if (s > cursor) {
+        segs.push({ task: "Desconocido", start: cursor, end: s });
+      }
+      if (s < cursor) s = cursor;
+      if (en > cursor && en > s) {
+        segs.push({ task: e.task, start: s, end: en });
+        cursor = en;
+      }
+    });
+    if (cursor < DAY_MIN) {
+      segs.push({ task: "Desconocido", start: cursor, end: DAY_MIN });
+    }
+    return segs;
+  }
+
+  function aggregateSegments(segs) {
+    var map = {};
+    segs.forEach(function (s) {
+      var dur = s.end - s.start;
+      map[s.task] = (map[s.task] || 0) + dur;
+    });
+    return map;
+  }
+
+  // ---------------------------------------------------------------
+  // Colors
+  // ---------------------------------------------------------------
+  var UNKNOWN_COLOR = "hsl(228, 12%, 42%)";
+
+  function hashHue(str) {
+    var hash = 0;
+    for (var i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return Math.abs(hash) % 360;
+  }
+
+  function taskColor(task) {
+    if (task === "Desconocido") return UNKNOWN_COLOR;
+    var hue = hashHue(task);
+    return "hsl(" + hue + ", 62%, 58%)";
+  }
+
+  // ---------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------
+  var state = {
+    selectedDate: todayStr()
+  };
+
+  // ---------------------------------------------------------------
+  // DOM refs
+  // ---------------------------------------------------------------
+  var el = {};
+  function cacheDom() {
+    [
+      "dateInput", "prevDay", "nextDay", "savedDaysSelect", "todayBtn",
+      "entryForm", "taskInput", "taskHistory", "startInput", "endInput",
+      "durationChips", "formHint",
+      "statTracked", "statUnknown", "statTasks", "statEntries", "insightText",
+      "dialHolder", "dialLegend", "rankingList",
+      "heatmapGrid",
+      "recordsList", "noRecords",
+      "exportBtn", "importBtn", "importFile", "wipeBtn",
+      "toast"
+    ].forEach(function (id) { el[id] = document.getElementById(id); });
+  }
+
+  // ---------------------------------------------------------------
+  // Toast
+  // ---------------------------------------------------------------
+  var toastTimer = null;
+  function showToast(msg) {
+    el.toast.textContent = msg;
+    el.toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      el.toast.classList.remove("show");
+    }, 2400);
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: date nav
+  // ---------------------------------------------------------------
+  function renderDateNav() {
+    el.dateInput.value = state.selectedDate;
+    var all = loadAll();
+    var dates = Object.keys(all).sort().reverse();
+    el.savedDaysSelect.innerHTML = '<option value="">— elegir —</option>';
+    dates.forEach(function (d) {
+      var opt = document.createElement("option");
+      opt.value = d;
+      opt.textContent = d + " (" + all[d].length + ")";
+      if (d === state.selectedDate) opt.selected = true;
+      el.savedDaysSelect.appendChild(opt);
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: stats + insight
+  // ---------------------------------------------------------------
+  function renderStats(entries, segs, agg) {
+    var validEntries = entries.filter(function (e) { return toMin(e.start) < toMin(e.end); });
+    var unknownMin = agg["Desconocido"] || 0;
+    var trackedMin = DAY_MIN - unknownMin;
+    var distinctTasks = Object.keys(agg).filter(function (t) { return t !== "Desconocido"; });
+
+    el.statTracked.textContent = fmtDuration(trackedMin);
+    el.statUnknown.textContent = fmtDuration(unknownMin);
+    el.statTasks.textContent = distinctTasks.length;
+    el.statEntries.textContent = validEntries.length;
+
+    if (validEntries.length === 0) {
+      el.insightText.innerHTML = "Todavía no hay nada registrado este día. Añade tu primera tarea arriba.";
+      return;
+    }
+
+    var sorted = distinctTasks
+      .map(function (t) { return [t, agg[t]]; })
+      .sort(function (a, b) { return b[1] - a[1]; });
+
+    var top = sorted[0];
+    var pctTop = Math.round((top[1] / DAY_MIN) * 100);
+    var pctUnknown = Math.round((unknownMin / DAY_MIN) * 100);
+
+    var msg = "Tu tarea principal fue <strong>" + escapeHtml(top[0]) + "</strong>, con " +
+      fmtDuration(top[1]) + " (" + pctTop + "% del día).";
+
+    if (pctUnknown >= 25) {
+      msg += " Tienes <strong>" + fmtDuration(unknownMin) + "</strong> sin clasificar (" + pctUnknown + "%) — quizá valga la pena repasar el día.";
+    } else if (unknownMin > 0) {
+      msg += " Quedan " + fmtDuration(unknownMin) + " sin registrar.";
+    }
+
+    el.insightText.innerHTML = msg;
+  }
+
+  function escapeHtml(s) {
+    var div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: Day dial (signature visual)
+  // ---------------------------------------------------------------
+  function renderDial(segs, agg, isToday) {
+    var size = 200, cx = size / 2, cy = size / 2, r = 78, sw = 30;
+    var circ = 2 * Math.PI * r;
+
+    var arcs = "";
+    segs.forEach(function (s) {
+      var dur = s.end - s.start;
+      if (dur <= 0) return;
+      var len = (dur / DAY_MIN) * circ;
+      var offset = (s.start / DAY_MIN) * circ;
+      var color = taskColor(s.task);
+      arcs += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r +
+        '" fill="none" stroke="' + color + '" stroke-width="' + sw +
+        '" stroke-dasharray="' + len.toFixed(2) + ' ' + (circ - len).toFixed(2) +
+        '" stroke-dashoffset="' + (-offset).toFixed(2) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')">' +
+        "<title>" + escapeHtml(s.task) + ": " + toHHMM(s.start) + "–" + toHHMM(s.end) + "</title></circle>";
+    });
+
+    // Hour ticks at 0/6/12/18
+    var ticks = "";
+    [0, 6, 12, 18].forEach(function (h) {
+      var angle = (h / 24) * 2 * Math.PI - Math.PI / 2;
+      var rOuter = r + sw / 2 + 6;
+      var rInner = r + sw / 2 + 1;
+      var x1 = cx + rInner * Math.cos(angle), y1 = cy + rInner * Math.sin(angle);
+      var x2 = cx + rOuter * Math.cos(angle), y2 = cy + rOuter * Math.sin(angle);
+      ticks += '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x2.toFixed(1) +
+        '" y2="' + y2.toFixed(1) + '" stroke="var(--muted-2)" stroke-width="1.5"/>';
+      var lx = cx + (rOuter + 10) * Math.cos(angle), ly = cy + (rOuter + 10) * Math.sin(angle);
+      var label = h === 0 ? "00" : h;
+      ticks += '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) +
+        '" fill="var(--muted-2)" font-size="9" font-family="var(--font-mono)" text-anchor="middle" dominant-baseline="middle">' + label + "</text>";
+    });
+
+    var nowLine = "";
+    if (isToday) {
+      var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      var na = (nowMin / DAY_MIN) * 2 * Math.PI - Math.PI / 2;
+      var nx1 = cx + (r - sw / 2 - 2) * Math.cos(na), ny1 = cy + (r - sw / 2 - 2) * Math.sin(na);
+      var nx2 = cx + (r + sw / 2 + 2) * Math.cos(na), ny2 = cy + (r + sw / 2 + 2) * Math.sin(na);
+      nowLine = '<line x1="' + nx1.toFixed(1) + '" y1="' + ny1.toFixed(1) + '" x2="' + nx2.toFixed(1) +
+        '" y2="' + ny2.toFixed(1) + '" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"/>';
+    }
+
+    var svg = '<svg viewBox="0 0 ' + size + " " + size + '" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="var(--bg-soft)" stroke-width="' + sw + '"/>' +
+      arcs + ticks + nowLine + "</svg>";
+
+    el.dialHolder.innerHTML = svg;
+
+    var centerDiv = document.createElement("div");
+    centerDiv.className = "dial-center";
+    var trackedMin = DAY_MIN - (agg["Desconocido"] || 0);
+    centerDiv.innerHTML = '<span class="dc-value">' + fmtDuration(trackedMin) + '</span><span class="dc-label">registrado</span>';
+    el.dialHolder.appendChild(centerDiv);
+
+    // legend
+    var sorted = Object.keys(agg).sort(function (a, b) { return agg[b] - agg[a]; });
+    el.dialLegend.innerHTML = "";
+    sorted.forEach(function (task) {
+      var item = document.createElement("div");
+      item.className = "legend-item";
+      item.innerHTML = '<span class="legend-swatch" style="background:' + taskColor(task) + '"></span>' +
+        escapeHtml(task) + " · " + fmtDuration(agg[task]);
+      el.dialLegend.appendChild(item);
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: ranking bars
+  // ---------------------------------------------------------------
+  function renderRanking(agg) {
+    var sorted = Object.keys(agg)
+      .map(function (t) { return [t, agg[t]]; })
+      .sort(function (a, b) { return b[1] - a[1]; });
+
+    var max = sorted.length ? sorted[0][1] : 1;
+    el.rankingList.innerHTML = "";
+
+    sorted.forEach(function (pair) {
+      var task = pair[0], min = pair[1];
+      var pct = Math.round((min / DAY_MIN) * 100);
+      var row = document.createElement("div");
+      row.className = "ranking-row";
+      row.innerHTML =
+        '<div class="ranking-top"><span class="ranking-name">' + escapeHtml(task) +
+        '</span><span class="ranking-meta">' + fmtDuration(min) + " · " + pct + '%</span></div>' +
+        '<div class="ranking-bar-track"><div class="ranking-bar-fill" style="width:' +
+        Math.max(2, (min / max) * 100) + '%;background:' + taskColor(task) + '"></div></div>';
+      el.rankingList.appendChild(row);
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: weekly heatmap
+  // ---------------------------------------------------------------
+  function renderHeatmap() {
+    var grid = el.heatmapGrid;
+    grid.innerHTML = "";
+
+    // corner
+    grid.appendChild(makeDiv("hm-corner", ""));
+    for (var h = 0; h < 24; h++) {
+      grid.appendChild(makeDiv("hm-hour-label", h % 3 === 0 ? String(h) : ""));
+    }
+
+    var days = [];
+    var base = strToDate(state.selectedDate);
+    for (var i = 13; i >= 0; i--) {
+      var d = new Date(base);
+      d.setDate(d.getDate() - i);
+      days.push(dateToStr(d));
+    }
+
+    days.forEach(function (dateStr) {
+      var label = document.createElement("div");
+      label.className = "hm-day-label";
+      label.textContent = dateStr.slice(5);
+      grid.appendChild(label);
+
+      var entries = getEntries(dateStr);
+      var hasData = entries.length > 0;
+      var segs = hasData ? computeDaySegments(entries) : [];
+
+      for (var hr = 0; hr < 24; hr++) {
+        var cell = document.createElement("div");
+        cell.className = "hm-cell";
+        cell.title = dateStr + " " + pad2(hr) + ":00";
+
+        if (hasData) {
+          var winStart = hr * 60, winEnd = winStart + 60;
+          var byTask = {};
+          segs.forEach(function (s) {
+            var ov = Math.min(s.end, winEnd) - Math.max(s.start, winStart);
+            if (ov > 0) byTask[s.task] = (byTask[s.task] || 0) + ov;
+          });
+          var bestTask = null, bestMin = 0;
+          Object.keys(byTask).forEach(function (t) {
+            if (byTask[t] > bestMin) { bestMin = byTask[t]; bestTask = t; }
+          });
+          if (bestTask) {
+            var opacity = 0.35 + 0.65 * (bestMin / 60);
+            cell.style.background = taskColor(bestTask);
+            cell.style.opacity = opacity.toFixed(2);
+            cell.title += " — " + bestTask + " (" + bestMin + " min)";
+          }
+        }
+        grid.appendChild(cell);
+      }
+    });
+  }
+
+  function makeDiv(cls, text) {
+    var d = document.createElement("div");
+    d.className = cls;
+    d.textContent = text;
+    return d;
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: records list
+  // ---------------------------------------------------------------
+  function renderRecords(entries) {
+    el.recordsList.innerHTML = "";
+    var valid = entries.filter(function (e) { return toMin(e.start) < toMin(e.end); })
+      .sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
+
+    el.noRecords.style.display = valid.length ? "none" : "block";
+
+    valid.forEach(function (entry) {
+      var row = document.createElement("div");
+      row.className = "record-row";
+      row.style.borderLeftColor = taskColor(entry.task);
+      row.dataset.id = entry.id;
+
+      var dur = toMin(entry.end) - toMin(entry.start);
+      row.innerHTML =
+        '<span class="record-time">' + entry.start + "–" + entry.end + '</span>' +
+        '<span class="record-task">' + escapeHtml(entry.task) + '</span>' +
+        '<span class="record-dur">' + fmtDuration(dur) + '</span>' +
+        '<span class="record-actions">' +
+        '<button type="button" class="edit-btn" aria-label="Editar">✎</button>' +
+        '<button type="button" class="del-btn" aria-label="Eliminar">✕</button>' +
+        "</span>";
+
+      row.querySelector(".del-btn").addEventListener("click", function () {
+        if (confirm('Eliminar "' + entry.task + '" (' + entry.start + "–" + entry.end + ")?")) {
+          deleteEntry(state.selectedDate, entry.id);
+          renderAll();
+          showToast("Registro eliminado");
+        }
+      });
+
+      row.querySelector(".edit-btn").addEventListener("click", function () {
+        openEditRow(row, entry);
+      });
+
+      el.recordsList.appendChild(row);
+    });
+  }
+
+  function openEditRow(row, entry) {
+    var editRow = document.createElement("div");
+    editRow.className = "edit-row";
+    editRow.innerHTML =
+      '<input type="text" class="e-task" value="' + escapeHtml(entry.task) + '">' +
+      '<input type="time" class="e-start" value="' + entry.start + '">' +
+      '<input type="time" class="e-end" value="' + entry.end + '">' +
+      '<div class="edit-actions">' +
+      '<button type="button" class="edit-cancel">Cancelar</button>' +
+      '<button type="button" class="edit-save">Guardar</button>' +
+      "</div>";
+
+    row.replaceWith(editRow);
+
+    editRow.querySelector(".edit-cancel").addEventListener("click", function () {
+      renderAll();
+    });
+
+    editRow.querySelector(".edit-save").addEventListener("click", function () {
+      var task = editRow.querySelector(".e-task").value.trim();
+      var start = editRow.querySelector(".e-start").value;
+      var end = editRow.querySelector(".e-end").value;
+      if (!task || !start || !end) { showToast("Rellena todos los campos"); return; }
+      if (toMin(end) <= toMin(start)) { showToast("La hora de fin debe ser posterior al inicio"); return; }
+      updateEntry(state.selectedDate, entry.id, { task: task, start: start, end: end });
+      renderAll();
+      showToast("Registro actualizado");
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // Master render
+  // ---------------------------------------------------------------
+  function renderAll() {
+    renderDateNav();
+    var entries = getEntries(state.selectedDate);
+    var segs = computeDaySegments(entries);
+    var agg = aggregateSegments(segs);
+    var isToday = state.selectedDate === todayStr();
+
+    renderStats(entries, segs, agg);
+    renderDial(segs, agg, isToday);
+    renderRanking(agg);
+    renderHeatmap();
+    renderRecords(entries);
+    refreshTaskHistory();
+    prefillStart();
+  }
+
+  function refreshTaskHistory() {
+    el.taskHistory.innerHTML = "";
+    allTaskNames().forEach(function (name) {
+      var opt = document.createElement("option");
+      opt.value = name;
+      el.taskHistory.appendChild(opt);
+    });
+  }
+
+  function prefillStart() {
+    var entries = getEntries(state.selectedDate).filter(function (e) { return toMin(e.start) < toMin(e.end); });
+    if (entries.length) {
+      var last = entries.sort(function (a, b) { return toMin(b.end) - toMin(a.end); })[0];
+      el.startInput.value = last.end;
+    } else if (state.selectedDate === todayStr()) {
+      el.startInput.value = nowRounded5();
+    } else {
+      el.startInput.value = "";
+    }
+    el.endInput.value = "";
+    clearChipSelection();
+  }
+
+  function clearChipSelection() {
+    el.durationChips.querySelectorAll(".chip").forEach(function (c) { c.classList.remove("chip-active"); });
+  }
+
+  // ---------------------------------------------------------------
+  // Event wiring
+  // ---------------------------------------------------------------
+  function wireEvents() {
+    el.dateInput.addEventListener("change", function () {
+      if (el.dateInput.value) {
+        state.selectedDate = el.dateInput.value;
+        renderAll();
+      }
+    });
+
+    el.prevDay.addEventListener("click", function () {
+      state.selectedDate = addDays(state.selectedDate, -1);
+      renderAll();
+    });
+
+    el.nextDay.addEventListener("click", function () {
+      state.selectedDate = addDays(state.selectedDate, 1);
+      renderAll();
+    });
+
+    el.todayBtn.addEventListener("click", function () {
+      state.selectedDate = todayStr();
+      renderAll();
+    });
+
+    el.savedDaysSelect.addEventListener("change", function () {
+      if (el.savedDaysSelect.value) {
+        state.selectedDate = el.savedDaysSelect.value;
+        renderAll();
+      }
+    });
+
+    document.querySelectorAll('[data-now-target]').forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var target = document.getElementById(btn.dataset.nowTarget);
+        target.value = nowRounded5();
+      });
+    });
+
+    el.durationChips.querySelectorAll(".chip").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        if (!el.startInput.value) {
+          el.startInput.value = state.selectedDate === todayStr() ? nowRounded5() : "09:00";
+        }
+        var mins = parseInt(chip.dataset.min, 10);
+        var endMin = toMin(el.startInput.value) + mins;
+        if (endMin >= DAY_MIN) endMin = DAY_MIN - 1;
+        el.endInput.value = toHHMM(endMin);
+        clearChipSelection();
+        chip.classList.add("chip-active");
+        validateForm();
+      });
+    });
+
+    [el.startInput, el.endInput].forEach(function (input) {
+      input.addEventListener("change", function () {
+        clearChipSelection();
+        validateForm();
+      });
+    });
+
+    el.entryForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var task = el.taskInput.value.trim();
+      var start = el.startInput.value;
+      var end = el.endInput.value;
+
+      if (!task) { showToast("Escribe el nombre de la tarea"); return; }
+      if (!start || !end) { showToast("Indica inicio y fin"); return; }
+      if (toMin(end) <= toMin(start)) { showToast("El fin debe ser posterior al inicio"); return; }
+
+      addEntry(state.selectedDate, { id: uid(), task: task, start: start, end: end });
+      el.taskInput.value = "";
+      renderAll();
+      el.taskInput.focus();
+      showToast("Añadido: " + task);
+    });
+
+    el.exportBtn.addEventListener("click", exportData);
+    el.importBtn.addEventListener("click", function () { el.importFile.click(); });
+    el.importFile.addEventListener("change", handleImport);
+    el.wipeBtn.addEventListener("click", wipeAll);
+  }
+
+  function validateForm() {
+    var start = el.startInput.value, end = el.endInput.value;
+    if (start && end) {
+      if (toMin(end) <= toMin(start)) {
+        el.formHint.textContent = "El fin debe ser posterior al inicio.";
+        el.formHint.classList.remove("ok");
+      } else {
+        el.formHint.textContent = "Duración: " + fmtDuration(toMin(end) - toMin(start));
+        el.formHint.classList.add("ok");
+      }
+    } else {
+      el.formHint.textContent = "";
+    }
+  }
+
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+
+  // ---------------------------------------------------------------
+  // Export / Import / Wipe
+  // ---------------------------------------------------------------
+  function exportData() {
+    var all = loadAll();
+    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 1, data: all };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "bitacora-backup-" + todayStr() + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("Exportado " + Object.keys(all).length + " día(s)");
+  }
+
+  function handleImport(ev) {
+    var file = ev.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var parsed = JSON.parse(reader.result);
+        var incoming = parsed && parsed.data ? parsed.data : parsed;
+        if (!incoming || typeof incoming !== "object") throw new Error("Formato no reconocido");
+
+        var dayCount = Object.keys(incoming).length;
+        if (!confirm("Se importarán " + dayCount + " día(s). Los días que ya existan localmente se sobrescribirán. ¿Continuar?")) {
+          el.importFile.value = "";
+          return;
+        }
+
+        var all = loadAll();
+        Object.keys(incoming).forEach(function (d) {
+          if (Array.isArray(incoming[d])) all[d] = incoming[d];
+        });
+        saveAll(all);
+        renderAll();
+        showToast("Importado correctamente");
+      } catch (e) {
+        console.error(e);
+        showToast("El archivo no es una copia válida");
+      }
+      el.importFile.value = "";
+    };
+    reader.readAsText(file);
+  }
+
+  function wipeAll() {
+    if (!confirm("Esto borrará TODOS los días guardados en este dispositivo. Exporta antes si quieres conservarlos. ¿Seguro?")) return;
+    if (!confirm("Última confirmación: se perderán todos los datos. ¿Continuar?")) return;
+    localStorage.removeItem(STORAGE_KEY);
+    state.selectedDate = todayStr();
+    renderAll();
+    showToast("Datos borrados");
+  }
+
+  // ---------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------
+  document.addEventListener("DOMContentLoaded", function () {
+    cacheDom();
+    wireEvents();
+    renderAll();
+  });
+})();

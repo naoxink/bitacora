@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bitácora — registro de tiempo diario</title>
+<meta name="description" content="Registra en qué inviertes tu tiempo cada día y visualízalo.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">◐</span>
+      <div class="brand-text">
+        <h1>Bitácora</h1>
+        <p class="brand-sub">a dónde se va el día</p>
+      </div>
+    </div>
+    <nav class="day-nav" aria-label="Navegación de días">
+      <button id="prevDay" class="icon-btn" aria-label="Día anterior">‹</button>
+      <input type="date" id="dateInput" aria-label="Fecha seleccionada">
+      <button id="nextDay" class="icon-btn" aria-label="Día siguiente">›</button>
+    </nav>
+  </div>
+  <div class="topbar-inner topbar-secondary">
+    <label class="saved-days-label" for="savedDaysSelect">Días guardados</label>
+    <select id="savedDaysSelect">
+      <option value="">— elegir —</option>
+    </select>
+    <button id="todayBtn" class="link-btn">Hoy</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- QUICK ADD -->
+  <section class="card entry-card" aria-labelledby="entryHeading">
+    <h2 id="entryHeading" class="card-title">Apuntar tarea</h2>
+    <form id="entryForm" autocomplete="off">
+      <div class="field">
+        <label for="taskInput">Tarea</label>
+        <input type="text" id="taskInput" list="taskHistory" placeholder="p. ej. Correo, Reunión, Diseño…" required>
+        <datalist id="taskHistory"></datalist>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="startInput">Inicio</label>
+          <div class="time-with-now">
+            <input type="time" id="startInput" required>
+            <button type="button" class="mini-btn" data-now-target="startInput">ahora</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="endInput">Fin</label>
+          <div class="time-with-now">
+            <input type="time" id="endInput" required>
+            <button type="button" class="mini-btn" data-now-target="endInput">ahora</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label-static">Duración rápida</span>
+        <div class="chip-row" id="durationChips">
+          <button type="button" class="chip" data-min="15">15m</button>
+          <button type="button" class="chip" data-min="30">30m</button>
+          <button type="button" class="chip" data-min="45">45m</button>
+          <button type="button" class="chip" data-min="60">1h</button>
+          <button type="button" class="chip" data-min="90">1h 30</button>
+          <button type="button" class="chip" data-min="120">2h</button>
+        </div>
+      </div>
+
+      <p id="formHint" class="form-hint" role="status"></p>
+
+      <button type="submit" class="primary-btn">Añadir registro</button>
+    </form>
+  </section>
+
+  <!-- SUMMARY -->
+  <section class="stats-strip" aria-label="Resumen del día">
+    <div class="stat-pill">
+      <span class="stat-value" id="statTracked">0h</span>
+      <span class="stat-label">registrado</span>
+    </div>
+    <div class="stat-pill stat-pill-muted">
+      <span class="stat-value" id="statUnknown">0h</span>
+      <span class="stat-label">desconocido</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-value" id="statTasks">0</span>
+      <span class="stat-label">tareas distintas</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-value" id="statEntries">0</span>
+      <span class="stat-label">registros</span>
+    </div>
+  </section>
+
+  <p class="insight" id="insightText"></p>
+
+  <!-- DAY DIAL -->
+  <section class="card" aria-labelledby="dialHeading">
+    <h2 id="dialHeading" class="card-title">El día en un vistazo</h2>
+    <div class="dial-wrap">
+      <div class="dial-svg-holder" id="dialHolder"></div>
+    </div>
+    <div class="legend" id="dialLegend"></div>
+  </section>
+
+  <!-- RANKING -->
+  <section class="card" aria-labelledby="rankingHeading">
+    <h2 id="rankingHeading" class="card-title">Reparto por tarea</h2>
+    <div id="rankingList" class="ranking-list"></div>
+  </section>
+
+  <!-- WEEKLY HEATMAP -->
+  <section class="card" aria-labelledby="heatmapHeading">
+    <h2 id="heatmapHeading" class="card-title">Mapa de calor — últimos 14 días</h2>
+    <p class="card-sub">Cada celda es una hora. El color indica la tarea dominante; más opaco = más ocupada esa hora.</p>
+    <div class="heatmap-scroll">
+      <div id="heatmapGrid" class="heatmap-grid"></div>
+    </div>
+  </section>
+
+  <!-- RECORDS -->
+  <section class="card" aria-labelledby="recordsHeading">
+    <h2 id="recordsHeading" class="card-title">Registros del día</h2>
+    <div id="recordsList" class="records-list"></div>
+    <p id="noRecords" class="empty-note">Aún no hay registros para este día.</p>
+  </section>
+
+</main>
+
+<footer class="app-footer">
+  <button id="exportBtn" class="footer-btn">Exportar todo (JSON)</button>
+  <button id="importBtn" class="footer-btn">Importar copia</button>
+  <input type="file" id="importFile" accept="application/json" hidden>
+  <button id="wipeBtn" class="footer-btn footer-btn-danger">Borrar todos los datos</button>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
