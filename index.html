@@ -121,7 +121,12 @@
 
   <!-- DAY DIAL -->
   <section class="card" aria-labelledby="dialHeading">
-    <h2 id="dialHeading" class="card-title">El día en un vistazo</h2>
+    <div class="card-title-row">
+      <h2 id="dialHeading" class="card-title">El día en un vistazo</h2>
+      <button type="button" id="shareDayBtn" class="share-btn" aria-label="Compartir estado del día">
+        <span aria-hidden="true">⇪</span> Compartir
+      </button>
+    </div>
     <div class="dial-wrap">
       <div class="dial-svg-holder" id="dialHolder"></div>
     </div>

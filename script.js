@@ -204,7 +204,7 @@
       "dialHolder", "dialLegend", "rankingList",
       "heatmapGrid",
       "recordsList", "noRecords",
-      "exportBtn", "importBtn", "importFile", "wipeBtn",
+      "exportBtn", "importBtn", "importFile", "wipeBtn", "shareDayBtn",
       "toast"
     ].forEach(function (id) { el[id] = document.getElementById(id); });
   }
@@ -452,7 +452,7 @@
   function renderRecords(entries) {
     el.recordsList.innerHTML = "";
     var valid = entries.filter(function (e) { return toMin(e.start) < toMin(e.end); })
-      .sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
+      .sort(function (a, b) { return toMin(b.start) - toMin(a.start); });
 
     el.noRecords.style.display = valid.length ? "none" : "block";
 
@@ -643,6 +643,7 @@
       showToast("Añadido: " + task);
     });
 
+    el.shareDayBtn.addEventListener("click", shareDayImage);
     el.exportBtn.addEventListener("click", exportData);
     el.importBtn.addEventListener("click", function () { el.importFile.click(); });
     el.importFile.addEventListener("change", handleImport);
@@ -669,20 +670,298 @@
   }
 
   // ---------------------------------------------------------------
+  // Share day as image
+  // ---------------------------------------------------------------
+  function formatDateEs(dateStr) {
+    var d = strToDate(dateStr);
+    var s = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(d);
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
+    var words = text.split(" ");
+    var line = "";
+    var lines = [];
+    for (var i = 0; i < words.length; i++) {
+      var test = line ? line + " " + words[i] : words[i];
+      if (ctx.measureText(test).width > maxWidth && line) {
+        lines.push(line);
+        line = words[i];
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    if (lines.length > maxLines) {
+      lines = lines.slice(0, maxLines);
+      lines[maxLines - 1] = lines[maxLines - 1].replace(/\s+\S*$/, "") + "…";
+    }
+    lines.forEach(function (l, idx) {
+      ctx.fillText(l, x, y + idx * lineHeight);
+    });
+    return lines.length;
+  }
+
+  function buildShareCanvas() {
+    var W = 1080, H = 1350;
+    var canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext("2d");
+
+    var COL_BG = "#10142a";
+    var COL_CARD = "#1b2145";
+    var COL_TEXT = "#edeff9";
+    var COL_MUTED = "#92a0c9";
+    var COL_MUTED2 = "#5f6a94";
+    var COL_ACCENT = "#f2b84b";
+    var FONT_SANS = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    var FONT_MONO = '"SFMono-Regular", Menlo, Consolas, monospace';
+
+    // background + faint grid
+    ctx.fillStyle = COL_BG;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(146,160,201,0.07)";
+    ctx.lineWidth = 1;
+    for (var gx = 0; gx <= W; gx += 36) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+    }
+    for (var gy = 0; gy <= H; gy += 36) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+
+    var entries = getEntries(state.selectedDate);
+    var validEntries = entries.filter(function (e) { return toMin(e.start) < toMin(e.end); });
+    var segs = computeDaySegments(entries);
+    var agg = aggregateSegments(segs);
+    var isToday = state.selectedDate === todayStr();
+    var unknownMin = agg["Desconocido"] || 0;
+    var trackedMin = DAY_MIN - unknownMin;
+    var distinctTasks = Object.keys(agg).filter(function (t) { return t !== "Desconocido"; });
+
+    // header
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = COL_ACCENT;
+    ctx.font = "700 42px " + FONT_SANS;
+    ctx.fillText("◐ Bitácora", 64, 96);
+
+    ctx.fillStyle = COL_MUTED;
+    ctx.font = "500 30px " + FONT_SANS;
+    ctx.fillText(formatDateEs(state.selectedDate), 64, 140);
+
+    // day dial
+    var cx = W / 2, cy = 430, r = 225, ringW = 68;
+    function angleFor(min) { return (min / DAY_MIN) * Math.PI * 2 - Math.PI / 2; }
+
+    ctx.lineWidth = ringW;
+    ctx.lineCap = "butt";
+    if (segs.length === 0 || validEntries.length === 0) {
+      ctx.strokeStyle = COL_CARD;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      segs.forEach(function (s) {
+        if (s.end - s.start <= 0) return;
+        ctx.strokeStyle = taskColor(s.task);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, angleFor(s.start), angleFor(s.end));
+        ctx.stroke();
+      });
+    }
+
+    if (isToday) {
+      var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      var na = angleFor(nowMin);
+      ctx.strokeStyle = COL_BG;
+      ctx.lineWidth = 8;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx + (r - ringW / 2 - 4) * Math.cos(na), cy + (r - ringW / 2 - 4) * Math.sin(na));
+      ctx.lineTo(cx + (r + ringW / 2 + 4) * Math.cos(na), cy + (r + ringW / 2 + 4) * Math.sin(na));
+      ctx.stroke();
+    }
+
+    // center text
+    ctx.textAlign = "center";
+    ctx.fillStyle = COL_TEXT;
+    ctx.font = "700 58px " + FONT_MONO;
+    ctx.fillText(fmtDuration(trackedMin), cx, cy + 14);
+    ctx.fillStyle = COL_MUTED;
+    ctx.font = "600 22px " + FONT_SANS;
+    ctx.fillText("REGISTRADO", cx, cy + 50);
+    ctx.textAlign = "left";
+
+    // stats row
+    var statY = 760;
+    var stats = [
+      [fmtDuration(trackedMin), "Registrado"],
+      [fmtDuration(unknownMin), "Desconocido"],
+      [String(distinctTasks.length), "Tareas"],
+      [String(validEntries.length), "Registros"]
+    ];
+    var colW = (W - 128) / 4;
+    stats.forEach(function (st, i) {
+      var x = 64 + colW * i + colW / 2;
+      ctx.textAlign = "center";
+      ctx.fillStyle = i === 0 ? COL_ACCENT : COL_TEXT;
+      ctx.font = "700 34px " + FONT_MONO;
+      ctx.fillText(st[0], x, statY);
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "600 18px " + FONT_SANS;
+      ctx.fillText(st[1].toUpperCase(), x, statY + 30);
+    });
+    ctx.textAlign = "left";
+
+    // divider
+    ctx.strokeStyle = "rgba(146,160,201,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(64, 830); ctx.lineTo(W - 64, 830); ctx.stroke();
+
+    // ranking
+    var rankY = 890;
+    ctx.fillStyle = COL_TEXT;
+    ctx.font = "700 28px " + FONT_SANS;
+    ctx.fillText("Reparto por tarea", 64, rankY);
+    rankY += 42;
+
+    var sorted = Object.keys(agg)
+      .map(function (t) { return [t, agg[t]]; })
+      .sort(function (a, b) { return b[1] - a[1]; });
+    var maxMin = sorted.length ? sorted[0][1] : 1;
+    var shown = sorted.slice(0, 6);
+
+    shown.forEach(function (pair) {
+      var task = pair[0], min = pair[1];
+      var pct = Math.round((min / DAY_MIN) * 100);
+
+      ctx.fillStyle = taskColor(task);
+      roundRectPath(ctx, 64, rankY - 20, 20, 20, 5);
+      ctx.fill();
+
+      ctx.fillStyle = COL_TEXT;
+      ctx.font = "600 24px " + FONT_SANS;
+      var label = task.length > 26 ? task.slice(0, 25) + "…" : task;
+      ctx.fillText(label, 96, rankY - 3);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "600 22px " + FONT_MONO;
+      ctx.fillText(fmtDuration(min) + " · " + pct + "%", W - 64, rankY - 3);
+      ctx.textAlign = "left";
+
+      var trackW = W - 128;
+      ctx.fillStyle = "rgba(146,160,201,0.12)";
+      roundRectPath(ctx, 64, rankY + 12, trackW, 12, 6);
+      ctx.fill();
+
+      ctx.fillStyle = taskColor(task);
+      var fillW = Math.max(14, (min / maxMin) * trackW);
+      roundRectPath(ctx, 64, rankY + 12, fillW, 12, 6);
+      ctx.fill();
+
+      rankY += 62;
+    });
+
+    if (sorted.length > 6) {
+      ctx.fillStyle = COL_MUTED2;
+      ctx.font = "500 20px " + FONT_SANS;
+      ctx.fillText("+ " + (sorted.length - 6) + " tarea(s) más", 64, rankY + 4);
+      rankY += 40;
+    }
+
+    // insight
+    if (validEntries.length > 0) {
+      var top = sorted[0];
+      var pctTop = Math.round((top[1] / DAY_MIN) * 100);
+      var insight = "Tarea principal: " + top[0] + " (" + fmtDuration(top[1]) + ", " + pctTop + "% del día).";
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "500 22px " + FONT_SANS;
+      wrapCanvasText(ctx, insight, 64, rankY + 36, W - 128, 30, 2);
+    }
+
+    // footer
+    ctx.fillStyle = COL_MUTED2;
+    ctx.font = "500 20px " + FONT_SANS;
+    ctx.textAlign = "center";
+    ctx.fillText("Generado con Bitácora", W / 2, H - 40);
+    ctx.textAlign = "left";
+
+    return canvas;
+  }
+
+  function roundRectPath(ctx, x, y, w, h, radius) {
+    var r = Math.min(radius, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function shareDayImage() {
+    var canvas;
+    try {
+      canvas = buildShareCanvas();
+    } catch (e) {
+      console.error(e);
+      showToast("No se pudo generar la imagen");
+      return;
+    }
+
+    canvas.toBlob(function (blob) {
+      if (!blob) { showToast("No se pudo generar la imagen"); return; }
+      var filename = "bitacora-" + state.selectedDate + ".png";
+      var fallbackToDownload = function (reason) {
+        downloadBlob(blob, filename);
+        showToast(reason || "Imagen descargada");
+      };
+
+      var file;
+      try {
+        file = new File([blob], filename, { type: "image/png" });
+      } catch (e) {
+        fallbackToDownload("Imagen descargada");
+        return;
+      }
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({
+          files: [file],
+          title: "Bitácora — " + state.selectedDate,
+          text: "Así se reparte mi " + formatDateEs(state.selectedDate).toLowerCase() + " en Bitácora."
+        }).catch(function (err) {
+          if (err && err.name !== "AbortError") {
+            fallbackToDownload("No se pudo compartir, imagen descargada");
+          }
+        });
+      } else {
+        fallbackToDownload("Tu navegador no admite compartir imágenes: descargada");
+      }
+    }, "image/png");
+  }
+
+  // ---------------------------------------------------------------
   // Export / Import / Wipe
   // ---------------------------------------------------------------
-  function exportData() {
-    var all = loadAll();
-    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 1, data: all };
-    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  function downloadBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    a.download = "bitacora-backup-" + todayStr() + ".json";
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  function exportData() {
+    var all = loadAll();
+    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 1, data: all };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    downloadBlob(blob, "bitacora-backup-" + todayStr() + ".json");
     showToast("Exportado " + Object.keys(all).length + " día(s)");
   }
 
