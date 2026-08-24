@@ -200,11 +200,11 @@
       "dateInput", "prevDay", "nextDay", "savedDaysSelect", "todayBtn",
       "entryForm", "taskInput", "taskHistory", "startInput", "endInput",
       "durationChips", "formHint",
-      "statTracked", "statUnknown", "statTasks", "statEntries", "insightText",
+      "statTracked", "statTasks", "statEntries", "insightText",
       "dialHolder", "dialLegend", "rankingList",
       "heatmapGrid",
       "recordsList", "noRecords",
-      "exportBtn", "importBtn", "importFile", "wipeBtn", "shareDayBtn",
+      "exportBtn", "importBtn", "importFile", "wipeBtn", "shareDayBtn", "shareWeekBtn",
       "toast"
     ].forEach(function (id) { el[id] = document.getElementById(id); });
   }
@@ -249,7 +249,6 @@
     var distinctTasks = Object.keys(agg).filter(function (t) { return t !== "Desconocido"; });
 
     el.statTracked.textContent = fmtDuration(trackedMin);
-    el.statUnknown.textContent = fmtDuration(unknownMin);
     el.statTasks.textContent = distinctTasks.length;
     el.statEntries.textContent = validEntries.length;
 
@@ -264,16 +263,9 @@
 
     var top = sorted[0];
     var pctTop = Math.round((top[1] / DAY_MIN) * 100);
-    var pctUnknown = Math.round((unknownMin / DAY_MIN) * 100);
 
     var msg = "Tu tarea principal fue <strong>" + escapeHtml(top[0]) + "</strong>, con " +
       fmtDuration(top[1]) + " (" + pctTop + "% del día).";
-
-    if (pctUnknown >= 25) {
-      msg += " Tienes <strong>" + fmtDuration(unknownMin) + "</strong> sin clasificar (" + pctUnknown + "%) — quizá valga la pena repasar el día.";
-    } else if (unknownMin > 0) {
-      msg += " Quedan " + fmtDuration(unknownMin) + " sin registrar.";
-    }
 
     el.insightText.innerHTML = msg;
   }
@@ -293,6 +285,7 @@
 
     var arcs = "";
     segs.forEach(function (s) {
+      if (s.task === "Desconocido") return;
       var dur = s.end - s.start;
       if (dur <= 0) return;
       var len = (dur / DAY_MIN) * circ;
@@ -344,7 +337,9 @@
     el.dialHolder.appendChild(centerDiv);
 
     // legend
-    var sorted = Object.keys(agg).sort(function (a, b) { return agg[b] - agg[a]; });
+    var sorted = Object.keys(agg)
+      .filter(function (t) { return t !== "Desconocido"; })
+      .sort(function (a, b) { return agg[b] - agg[a]; });
     el.dialLegend.innerHTML = "";
     sorted.forEach(function (task) {
       var item = document.createElement("div");
@@ -360,11 +355,18 @@
   // ---------------------------------------------------------------
   function renderRanking(agg) {
     var sorted = Object.keys(agg)
+      .filter(function (t) { return t !== "Desconocido"; })
       .map(function (t) { return [t, agg[t]]; })
       .sort(function (a, b) { return b[1] - a[1]; });
 
-    var max = sorted.length ? sorted[0][1] : 1;
     el.rankingList.innerHTML = "";
+
+    if (sorted.length === 0) {
+      el.rankingList.innerHTML = '<p class="empty-note">Aún no hay tareas registradas este día.</p>';
+      return;
+    }
+
+    var max = sorted[0][1];
 
     sorted.forEach(function (pair) {
       var task = pair[0], min = pair[1];
@@ -383,6 +385,33 @@
   // ---------------------------------------------------------------
   // Rendering: weekly heatmap
   // ---------------------------------------------------------------
+  function getHeatmapDays(baseDateStr) {
+    var days = [];
+    var base = strToDate(baseDateStr);
+    for (var i = 13; i >= 0; i--) {
+      var d = new Date(base);
+      d.setDate(d.getDate() - i);
+      days.push(dateToStr(d));
+    }
+    return days;
+  }
+
+  // Tarea dominante en una franja horaria, ignorando el tiempo "Desconocido".
+  function bestTaskForHour(segs, hr) {
+    var winStart = hr * 60, winEnd = winStart + 60;
+    var byTask = {};
+    segs.forEach(function (s) {
+      if (s.task === "Desconocido") return;
+      var ov = Math.min(s.end, winEnd) - Math.max(s.start, winStart);
+      if (ov > 0) byTask[s.task] = (byTask[s.task] || 0) + ov;
+    });
+    var bestTask = null, bestMin = 0;
+    Object.keys(byTask).forEach(function (t) {
+      if (byTask[t] > bestMin) { bestMin = byTask[t]; bestTask = t; }
+    });
+    return bestTask ? { task: bestTask, min: bestMin } : null;
+  }
+
   function renderHeatmap() {
     var grid = el.heatmapGrid;
     grid.innerHTML = "";
@@ -393,13 +422,7 @@
       grid.appendChild(makeDiv("hm-hour-label", h % 3 === 0 ? String(h) : ""));
     }
 
-    var days = [];
-    var base = strToDate(state.selectedDate);
-    for (var i = 13; i >= 0; i--) {
-      var d = new Date(base);
-      d.setDate(d.getDate() - i);
-      days.push(dateToStr(d));
-    }
+    var days = getHeatmapDays(state.selectedDate);
 
     days.forEach(function (dateStr) {
       var label = document.createElement("div");
@@ -417,21 +440,12 @@
         cell.title = dateStr + " " + pad2(hr) + ":00";
 
         if (hasData) {
-          var winStart = hr * 60, winEnd = winStart + 60;
-          var byTask = {};
-          segs.forEach(function (s) {
-            var ov = Math.min(s.end, winEnd) - Math.max(s.start, winStart);
-            if (ov > 0) byTask[s.task] = (byTask[s.task] || 0) + ov;
-          });
-          var bestTask = null, bestMin = 0;
-          Object.keys(byTask).forEach(function (t) {
-            if (byTask[t] > bestMin) { bestMin = byTask[t]; bestTask = t; }
-          });
-          if (bestTask) {
-            var opacity = 0.35 + 0.65 * (bestMin / 60);
-            cell.style.background = taskColor(bestTask);
+          var best = bestTaskForHour(segs, hr);
+          if (best) {
+            var opacity = 0.35 + 0.65 * (best.min / 60);
+            cell.style.background = taskColor(best.task);
             cell.style.opacity = opacity.toFixed(2);
-            cell.title += " — " + bestTask + " (" + bestMin + " min)";
+            cell.title += " — " + best.task + " (" + best.min + " min)";
           }
         }
         grid.appendChild(cell);
@@ -644,6 +658,7 @@
     });
 
     el.shareDayBtn.addEventListener("click", shareDayImage);
+    el.shareWeekBtn.addEventListener("click", shareWeekImage);
     el.exportBtn.addEventListener("click", exportData);
     el.importBtn.addEventListener("click", function () { el.importFile.click(); });
     el.importFile.addEventListener("change", handleImport);
@@ -762,6 +777,7 @@
       ctx.stroke();
     } else {
       segs.forEach(function (s) {
+        if (s.task === "Desconocido") return;
         if (s.end - s.start <= 0) return;
         ctx.strokeStyle = taskColor(s.task);
         ctx.beginPath();
@@ -796,11 +812,10 @@
     var statY = 760;
     var stats = [
       [fmtDuration(trackedMin), "Registrado"],
-      [fmtDuration(unknownMin), "Desconocido"],
       [String(distinctTasks.length), "Tareas"],
       [String(validEntries.length), "Registros"]
     ];
-    var colW = (W - 128) / 4;
+    var colW = (W - 128) / 3;
     stats.forEach(function (st, i) {
       var x = 64 + colW * i + colW / 2;
       ctx.textAlign = "center";
@@ -826,10 +841,18 @@
     rankY += 42;
 
     var sorted = Object.keys(agg)
+      .filter(function (t) { return t !== "Desconocido"; })
       .map(function (t) { return [t, agg[t]]; })
       .sort(function (a, b) { return b[1] - a[1]; });
     var maxMin = sorted.length ? sorted[0][1] : 1;
     var shown = sorted.slice(0, 6);
+
+    if (shown.length === 0) {
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "500 22px " + FONT_SANS;
+      ctx.fillText("Todavía no hay tareas registradas.", 64, rankY);
+      rankY += 40;
+    }
 
     shown.forEach(function (pair) {
       var task = pair[0], min = pair[1];
@@ -890,6 +913,216 @@
     return canvas;
   }
 
+  function buildWeekShareCanvas() {
+    var W = 1080, H = 1350;
+    var canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext("2d");
+
+    var COL_BG = "#10142a";
+    var COL_TEXT = "#edeff9";
+    var COL_MUTED = "#92a0c9";
+    var COL_MUTED2 = "#5f6a94";
+    var COL_ACCENT = "#f2b84b";
+    var FONT_SANS = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    var FONT_MONO = '"SFMono-Regular", Menlo, Consolas, monospace';
+
+    // background + faint grid
+    ctx.fillStyle = COL_BG;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(146,160,201,0.07)";
+    ctx.lineWidth = 1;
+    for (var gx = 0; gx <= W; gx += 36) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+    }
+    for (var gy = 0; gy <= H; gy += 36) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+
+    var days = getHeatmapDays(state.selectedDate);
+
+    // Agregado del rango (ignorando "Desconocido") + segmentos por día para el grid
+    var weekAgg = {};
+    var daysWithData = 0;
+    var totalTracked = 0;
+    var perDaySegs = {};
+    days.forEach(function (dateStr) {
+      var entries = getEntries(dateStr);
+      if (entries.length) {
+        daysWithData++;
+        var segs = computeDaySegments(entries);
+        perDaySegs[dateStr] = segs;
+        var agg = aggregateSegments(segs);
+        Object.keys(agg).forEach(function (t) {
+          if (t === "Desconocido") return;
+          weekAgg[t] = (weekAgg[t] || 0) + agg[t];
+          totalTracked += agg[t];
+        });
+      } else {
+        perDaySegs[dateStr] = [];
+      }
+    });
+
+    var distinctTasks = Object.keys(weekAgg);
+
+    // header
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = COL_ACCENT;
+    ctx.font = "700 42px " + FONT_SANS;
+    ctx.fillText("◐ Bitácora", 64, 96);
+
+    ctx.fillStyle = COL_MUTED;
+    ctx.font = "500 26px " + FONT_SANS;
+    ctx.fillText("Últimos 14 días · hasta " + formatDateEs(state.selectedDate), 64, 136);
+
+    // stats row
+    var statY = 200;
+    var stats = [
+      [fmtDuration(totalTracked), "Total registrado"],
+      [daysWithData + "/14", "Días con registros"],
+      [String(distinctTasks.length), "Tareas distintas"]
+    ];
+    var colW = (W - 128) / 3;
+    stats.forEach(function (st, i) {
+      var x = 64 + colW * i + colW / 2;
+      ctx.textAlign = "center";
+      ctx.fillStyle = i === 0 ? COL_ACCENT : COL_TEXT;
+      ctx.font = "700 32px " + FONT_MONO;
+      ctx.fillText(st[0], x, statY);
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "600 17px " + FONT_SANS;
+      ctx.fillText(st[1].toUpperCase(), x, statY + 28);
+    });
+    ctx.textAlign = "left";
+
+    ctx.strokeStyle = "rgba(146,160,201,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(64, 250); ctx.lineTo(W - 64, 250); ctx.stroke();
+
+    // grid del mapa de calor
+    var marginX = 64;
+    var dayLabelW = 74;
+    var cellW = 33, cellGap = 2;
+    var cellH = 32, rowGap = 2;
+    var gridLeft = marginX + dayLabelW;
+    var gridTop = 300;
+
+    ctx.fillStyle = COL_TEXT;
+    ctx.font = "700 26px " + FONT_SANS;
+    ctx.fillText("Mapa de calor por hora", marginX, gridTop - 20);
+
+    // etiquetas de horas
+    var hourLabelY = gridTop + 14;
+    ctx.font = "600 14px " + FONT_MONO;
+    ctx.fillStyle = COL_MUTED2;
+    ctx.textAlign = "center";
+    for (var h = 0; h < 24; h++) {
+      if (h % 3 === 0) {
+        var hx = gridLeft + h * (cellW + cellGap) + cellW / 2;
+        ctx.fillText(String(h), hx, hourLabelY);
+      }
+    }
+    ctx.textAlign = "left";
+
+    var rowsTop = gridTop + 32;
+    days.forEach(function (dateStr, idx) {
+      var y = rowsTop + idx * (cellH + rowGap);
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "500 15px " + FONT_MONO;
+      ctx.textAlign = "right";
+      ctx.fillText(dateStr.slice(5), gridLeft - 10, y + cellH / 2 + 5);
+      ctx.textAlign = "left";
+
+      var segs = perDaySegs[dateStr];
+      for (var hr = 0; hr < 24; hr++) {
+        var x = gridLeft + hr * (cellW + cellGap);
+        var best = segs.length ? bestTaskForHour(segs, hr) : null;
+        if (best) {
+          var opacity = 0.35 + 0.65 * (best.min / 60);
+          ctx.globalAlpha = opacity;
+          ctx.fillStyle = taskColor(best.task);
+        } else {
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = "rgba(146,160,201,0.08)";
+        }
+        roundRectPath(ctx, x, y, cellW, cellH, 4);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    });
+
+    var gridBottom = rowsTop + 14 * (cellH + rowGap);
+
+    // ranking de tareas del rango
+    var rankY = gridBottom + 60;
+    ctx.fillStyle = COL_TEXT;
+    ctx.font = "700 28px " + FONT_SANS;
+    ctx.fillText("Reparto por tarea (14 días)", 64, rankY);
+    rankY += 42;
+
+    var sorted = distinctTasks
+      .map(function (t) { return [t, weekAgg[t]]; })
+      .sort(function (a, b) { return b[1] - a[1]; });
+    var maxMin = sorted.length ? sorted[0][1] : 1;
+    var shown = sorted.slice(0, 6);
+
+    if (shown.length === 0) {
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "500 22px " + FONT_SANS;
+      ctx.fillText("Todavía no hay tareas registradas en este periodo.", 64, rankY);
+      rankY += 40;
+    }
+
+    shown.forEach(function (pair) {
+      var task = pair[0], min = pair[1];
+      var pct = totalTracked > 0 ? Math.round((min / totalTracked) * 100) : 0;
+
+      ctx.fillStyle = taskColor(task);
+      roundRectPath(ctx, 64, rankY - 20, 20, 20, 5);
+      ctx.fill();
+
+      ctx.fillStyle = COL_TEXT;
+      ctx.font = "600 24px " + FONT_SANS;
+      var label = task.length > 24 ? task.slice(0, 23) + "…" : task;
+      ctx.fillText(label, 96, rankY - 3);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "600 22px " + FONT_MONO;
+      ctx.fillText(fmtDuration(min) + " · " + pct + "%", W - 64, rankY - 3);
+      ctx.textAlign = "left";
+
+      var trackW = W - 128;
+      ctx.fillStyle = "rgba(146,160,201,0.12)";
+      roundRectPath(ctx, 64, rankY + 12, trackW, 12, 6);
+      ctx.fill();
+
+      ctx.fillStyle = taskColor(task);
+      var fillW = Math.max(14, (min / maxMin) * trackW);
+      roundRectPath(ctx, 64, rankY + 12, fillW, 12, 6);
+      ctx.fill();
+
+      rankY += 62;
+    });
+
+    if (sorted.length > 6) {
+      ctx.fillStyle = COL_MUTED2;
+      ctx.font = "500 20px " + FONT_SANS;
+      ctx.fillText("+ " + (sorted.length - 6) + " tarea(s) más", 64, rankY + 4);
+      rankY += 40;
+    }
+
+    // footer
+    ctx.fillStyle = COL_MUTED2;
+    ctx.font = "500 20px " + FONT_SANS;
+    ctx.textAlign = "center";
+    ctx.fillText("Generado con Bitácora", W / 2, H - 40);
+    ctx.textAlign = "left";
+
+    return canvas;
+  }
+
   function roundRectPath(ctx, x, y, w, h, radius) {
     var r = Math.min(radius, w / 2, h / 2);
     ctx.beginPath();
@@ -901,19 +1134,10 @@
     ctx.closePath();
   }
 
-  function shareDayImage() {
-    var canvas;
-    try {
-      canvas = buildShareCanvas();
-    } catch (e) {
-      console.error(e);
-      showToast("No se pudo generar la imagen");
-      return;
-    }
-
+  function shareCanvasImage(canvas, filenameBase, shareTitle, shareText) {
     canvas.toBlob(function (blob) {
       if (!blob) { showToast("No se pudo generar la imagen"); return; }
-      var filename = "bitacora-" + state.selectedDate + ".png";
+      var filename = filenameBase + ".png";
       var fallbackToDownload = function (reason) {
         downloadBlob(blob, filename);
         showToast(reason || "Imagen descargada");
@@ -930,8 +1154,8 @@
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         navigator.share({
           files: [file],
-          title: "Bitácora — " + state.selectedDate,
-          text: "Así se reparte mi " + formatDateEs(state.selectedDate).toLowerCase() + " en Bitácora."
+          title: shareTitle,
+          text: shareText
         }).catch(function (err) {
           if (err && err.name !== "AbortError") {
             fallbackToDownload("No se pudo compartir, imagen descargada");
@@ -941,6 +1165,42 @@
         fallbackToDownload("Tu navegador no admite compartir imágenes: descargada");
       }
     }, "image/png");
+  }
+
+  function shareDayImage() {
+    var canvas;
+    try {
+      canvas = buildShareCanvas();
+    } catch (e) {
+      console.error(e);
+      showToast("No se pudo generar la imagen");
+      return;
+    }
+
+    shareCanvasImage(
+      canvas,
+      "bitacora-" + state.selectedDate,
+      "Bitácora — " + state.selectedDate,
+      "Así se reparte mi " + formatDateEs(state.selectedDate).toLowerCase() + " en Bitácora."
+    );
+  }
+
+  function shareWeekImage() {
+    var canvas;
+    try {
+      canvas = buildWeekShareCanvas();
+    } catch (e) {
+      console.error(e);
+      showToast("No se pudo generar la imagen");
+      return;
+    }
+
+    shareCanvasImage(
+      canvas,
+      "bitacora-semana-" + state.selectedDate,
+      "Bitácora — últimos 14 días",
+      "Así se reparte mi tiempo en los últimos 14 días en Bitácora."
+    );
   }
 
   // ---------------------------------------------------------------

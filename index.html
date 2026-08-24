@@ -103,10 +103,6 @@
       <span class="stat-value" id="statTracked">0h</span>
       <span class="stat-label">registrado</span>
     </div>
-    <div class="stat-pill stat-pill-muted">
-      <span class="stat-value" id="statUnknown">0h</span>
-      <span class="stat-label">desconocido</span>
-    </div>
     <div class="stat-pill">
       <span class="stat-value" id="statTasks">0</span>
       <span class="stat-label">tareas distintas</span>
@@ -141,7 +137,12 @@
 
   <!-- WEEKLY HEATMAP -->
   <section class="card" aria-labelledby="heatmapHeading">
-    <h2 id="heatmapHeading" class="card-title">Mapa de calor — últimos 14 días</h2>
+    <div class="card-title-row">
+      <h2 id="heatmapHeading" class="card-title">Mapa de calor — últimos 14 días</h2>
+      <button type="button" id="shareWeekBtn" class="share-btn" aria-label="Compartir mapa de calor de 14 días">
+        <span aria-hidden="true">⇪</span> Compartir
+      </button>
+    </div>
     <p class="card-sub">Cada celda es una hora. El color indica la tarea dominante; más opaco = más ocupada esa hora.</p>
     <div class="heatmap-scroll">
       <div id="heatmapGrid" class="heatmap-grid"></div>
