@@ -47,6 +47,7 @@
       <option value="">— elegir —</option>
     </select>
     <button id="todayBtn" class="link-btn">Hoy</button>
+    <button id="settingsBtn" class="icon-btn" aria-label="Más opciones">⚙</button>
   </div>
 </header>
 
@@ -158,12 +159,21 @@
 
 </main>
 
-<footer class="app-footer">
-  <button id="exportBtn" class="footer-btn">Exportar todo (JSON)</button>
-  <button id="importBtn" class="footer-btn">Importar copia</button>
-  <input type="file" id="importFile" accept="application/json" hidden>
-  <button id="wipeBtn" class="footer-btn footer-btn-danger">Borrar todos los datos</button>
-</footer>
+<div id="settingsModal" class="modal-overlay" hidden>
+  <div class="modal-sheet" role="dialog" aria-labelledby="settingsHeading">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h2 id="settingsHeading" class="card-title">Más opciones</h2>
+      <button id="closeSettings" class="icon-btn" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <button id="exportBtn" class="footer-btn">Exportar todo (JSON)</button>
+      <button id="importBtn" class="footer-btn">Importar copia</button>
+      <input type="file" id="importFile" accept="application/json" hidden>
+      <button id="wipeBtn" class="footer-btn footer-btn-danger">Borrar todos los datos</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

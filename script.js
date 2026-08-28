@@ -204,8 +204,10 @@
       "dialHolder", "dialLegend", "rankingList",
       "heatmapGrid",
       "recordsList", "noRecords",
-      "exportBtn", "importBtn", "importFile", "wipeBtn", "shareDayBtn", "shareWeekBtn",
-      "toast"
+      "shareDayBtn", "shareWeekBtn",
+      "toast",
+      "exportBtn", "importBtn", "importFile", "wipeBtn",
+      "settingsBtn", "closeSettings", "settingsModal",
     ].forEach(function (id) { el[id] = document.getElementById(id); });
   }
 
@@ -663,6 +665,18 @@
     el.importBtn.addEventListener("click", function () { el.importFile.click(); });
     el.importFile.addEventListener("change", handleImport);
     el.wipeBtn.addEventListener("click", wipeAll);
+
+    el.settingsBtn.addEventListener("click", function () {
+      el.settingsModal.hidden = false;
+    });
+
+    el.closeSettings.addEventListener("click", function () {
+      el.settingsModal.hidden = true;
+    });
+
+    el.settingsModal.addEventListener("click", function (ev) {
+      if (ev.target === el.settingsModal) el.settingsModal.hidden = true;
+    });
   }
 
   function validateForm() {

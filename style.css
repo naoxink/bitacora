@@ -37,7 +37,7 @@ body {
     linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
   background-size: 28px 28px;
   background-attachment: fixed;
-  padding-bottom: 100px;
+  padding-bottom: 24px;
 }
 
 ::selection { background: var(--accent); color: var(--accent-ink); }
@@ -609,4 +609,55 @@ main {
 /* ---------- Responsive ---------- */
 @media (min-width: 640px) {
   .brand-mark { font-size: 30px; }
+}
+
+/* ---------- Settings modal ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 20, 0.55);
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.modal-overlay[hidden] { display: none; }
+
+.modal-sheet {
+  width: 100%;
+  max-width: 720px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-bottom: none;
+  border-radius: 20px 20px 0 0;
+  padding: 8px 18px calc(18px + env(safe-area-inset-bottom));
+  box-shadow: var(--shadow);
+  animation: sheet-up 0.2s ease-out;
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(16px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--card-border);
+  border-radius: 999px;
+  margin: 8px auto 10px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.modal-header .card-title { margin: 0; }
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
