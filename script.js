@@ -2,6 +2,7 @@
   "use strict";
 
   var STORAGE_KEY = "bitacora_dias_v1";
+  var STORAGE_KEY_GOALS = "bitacora_metas_v1";
   var DAY_MIN = 1440;
 
   // ---------------------------------------------------------------
@@ -74,6 +75,43 @@
       });
     });
     return Object.keys(set).sort(function (a, b) { return a.localeCompare(b, "es"); });
+  }
+
+  // ---------------------------------------------------------------
+  // Goals storage helpers
+  // ---------------------------------------------------------------
+  function loadGoals() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY_GOALS);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      console.error("Error leyendo metas", e);
+      return [];
+    }
+  }
+
+  function saveGoals(goals) {
+    try {
+      localStorage.setItem(STORAGE_KEY_GOALS, JSON.stringify(goals));
+      return true;
+    } catch (e) {
+      console.error("Error guardando metas", e);
+      showToast("No se pudo guardar la meta.");
+      return false;
+    }
+  }
+
+  function upsertGoal(goal) {
+    var goals = loadGoals();
+    var idx = goals.findIndex(function (g) { return g.id === goal.id; });
+    if (idx === -1) goals.push(goal);
+    else goals[idx] = goal;
+    saveGoals(goals);
+  }
+
+  function deleteGoal(id) {
+    var goals = loadGoals().filter(function (g) { return g.id !== id; });
+    saveGoals(goals);
   }
 
   // ---------------------------------------------------------------
@@ -185,10 +223,113 @@
   }
 
   // ---------------------------------------------------------------
+  // Goals: evaluation
+  // ---------------------------------------------------------------
+  // Una meta tiene esta forma:
+  // {
+  //   id, label, keyword,
+  //   targetTime: "HH:MM" | "",   // opcional: hora objetivo
+  //   toleranceMin: number,       // margen +/- minutos alrededor de targetTime
+  //   minDuration: number         // minutos mínimos requeridos (0 = sin mínimo)
+  // }
+  // Se evalúa siempre contra los registros del día que se está viendo,
+  // usando la definición ACTUAL de la meta (no hay histórico de metas):
+  // así, si cambias una meta, el cambio se refleja al instante en
+  // cualquier día que consultes.
+  function computeGoalStatus(goal, dateStr, entries) {
+    var kw = (goal.keyword || "").trim().toLowerCase();
+    var valid = entries.filter(function (e) { return toMin(e.start) < toMin(e.end); });
+
+    var hasTarget = !!goal.targetTime;
+    var wStart = 0, wEnd = DAY_MIN;
+    var matching;
+
+    if (hasTarget) {
+      var t = toMin(goal.targetTime);
+      var tol = (goal.toleranceMin != null && goal.toleranceMin !== "") ? Number(goal.toleranceMin) : 30;
+      wStart = Math.max(0, t - tol);
+      wEnd = Math.min(DAY_MIN, t + tol);
+      matching = valid.filter(function (e) {
+        if (kw && e.task.toLowerCase().indexOf(kw) === -1) return false;
+        return toMin(e.end) > wStart && toMin(e.start) < wEnd;
+      });
+    } else {
+      matching = valid.filter(function (e) {
+        return !kw || e.task.toLowerCase().indexOf(kw) !== -1;
+      });
+    }
+
+    var totalDur = matching.reduce(function (sum, e) {
+      return sum + (toMin(e.end) - toMin(e.start));
+    }, 0);
+
+    var required = Number(goal.minDuration) || 0;
+    var found = matching.length > 0;
+    var achieved = required > 0 ? totalDur >= required : found;
+
+    var today = todayStr();
+    var isPast = dateStr < today;
+    var isToday = dateStr === today;
+
+    var windowClosed = isPast;
+    if (isToday) {
+      if (hasTarget) {
+        var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+        windowClosed = nowMin > wEnd;
+      } else {
+        windowClosed = false;
+      }
+    }
+
+    var status;
+    if (achieved) {
+      status = "met";
+    } else if (windowClosed) {
+      status = (required > 0 && totalDur > 0) ? "partial" : "missed";
+    } else {
+      status = "pending";
+    }
+
+    return { status: status, totalDur: totalDur, required: required, found: found, matching: matching };
+  }
+
+  var GOAL_STATUS_ICON = {
+    met: "✓",
+    partial: "◐",
+    missed: "✕",
+    pending: "…"
+  };
+
+  function goalMetaText(goal) {
+    var parts = [];
+    parts.push('coincide con "' + (goal.keyword || "") + '"');
+    if (goal.targetTime) {
+      var tol = (goal.toleranceMin != null && goal.toleranceMin !== "") ? Number(goal.toleranceMin) : 30;
+      parts.push("sobre las " + goal.targetTime + " (±" + tol + "m)");
+    }
+    if (Number(goal.minDuration) > 0) {
+      parts.push("mín. " + fmtDuration(Number(goal.minDuration)));
+    }
+    return parts.join(" · ");
+  }
+
+  function goalResultText(result) {
+    if (result.required > 0) {
+      return fmtDuration(result.totalDur) + " / " + fmtDuration(result.required);
+    }
+    if (result.found) {
+      var first = result.matching.slice().sort(function (a, b) { return toMin(a.start) - toMin(b.start); })[0];
+      return "hecho a las " + first.start;
+    }
+    return "sin registrar todavía";
+  }
+
+  // ---------------------------------------------------------------
   // State
   // ---------------------------------------------------------------
   var state = {
-    selectedDate: todayStr()
+    selectedDate: todayStr(),
+    goalsExpanded: false
   };
 
   // ---------------------------------------------------------------
@@ -201,6 +342,8 @@
       "entryForm", "taskInput", "taskHistory", "startInput", "endInput",
       "durationChips", "formHint",
       "statTracked", "statTasks", "statEntries", "insightText",
+      "goalsToggle", "goalsBody", "goalsSummary",
+      "addGoalBtn", "shareGoalsBtn", "goalFormWrap", "goalsList", "noGoals",
       "dialHolder", "dialLegend", "rankingList",
       "heatmapGrid",
       "recordsList", "noRecords",
@@ -276,6 +419,173 @@
     var div = document.createElement("div");
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  // ---------------------------------------------------------------
+  // Rendering: Goals
+  // ---------------------------------------------------------------
+  var GOAL_STATUS_LABEL = {
+    met: "cumplida",
+    partial: "parcial",
+    missed: "no cumplida",
+    pending: "pendiente"
+  };
+
+  function renderGoalsSummary(goals, entries) {
+    if (goals.length === 0) {
+      el.goalsSummary.textContent = "sin metas";
+      return;
+    }
+    var counts = { met: 0, partial: 0, missed: 0, pending: 0 };
+    goals.forEach(function (goal) {
+      var result = computeGoalStatus(goal, state.selectedDate, entries);
+      counts[result.status]++;
+    });
+    var parts = [];
+    ["met", "partial", "missed", "pending"].forEach(function (st) {
+      if (counts[st] > 0) parts.push(GOAL_STATUS_ICON[st] + counts[st]);
+    });
+    el.goalsSummary.textContent = parts.join(" ");
+  }
+
+  function setGoalsExpanded(expanded) {
+    state.goalsExpanded = expanded;
+    el.goalsToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    el.goalsBody.hidden = !expanded;
+    if (!expanded) el.goalFormWrap.innerHTML = "";
+  }
+
+  function renderGoals(entries) {
+    var goals = loadGoals();
+    renderGoalsSummary(goals, entries);
+
+    el.goalsList.innerHTML = "";
+    el.noGoals.style.display = goals.length ? "none" : "block";
+
+    goals.forEach(function (goal) {
+      var result = computeGoalStatus(goal, state.selectedDate, entries);
+      var row = document.createElement("div");
+      row.className = "goal-row goal-" + result.status;
+      row.innerHTML =
+        '<span class="goal-status-icon" aria-hidden="true">' + GOAL_STATUS_ICON[result.status] + '</span>' +
+        '<div class="goal-info">' +
+        '<div class="goal-label">' + escapeHtml(goal.label || goal.keyword) + '</div>' +
+        '<div class="goal-meta">' + escapeHtml(goalMetaText(goal)) + '</div>' +
+        '<div class="goal-result">' + escapeHtml(goalResultText(result)) + '</div>' +
+        '</div>' +
+        '<div class="goal-actions">' +
+        '<button type="button" class="goal-edit-btn" aria-label="Editar meta">✎</button>' +
+        '<button type="button" class="goal-del-btn" aria-label="Eliminar meta">✕</button>' +
+        '</div>';
+
+      row.querySelector(".goal-del-btn").addEventListener("click", function () {
+        if (confirm('Eliminar la meta "' + (goal.label || goal.keyword) + '"?')) {
+          deleteGoal(goal.id);
+          renderAll();
+          showToast("Meta eliminada");
+        }
+      });
+
+      row.querySelector(".goal-edit-btn").addEventListener("click", function () {
+        openGoalForm(goal);
+      });
+
+      el.goalsList.appendChild(row);
+    });
+  }
+
+  function openGoalForm(existingGoal) {
+    var isNew = !existingGoal;
+    var goal = existingGoal || { id: uid(), label: "", keyword: "", targetTime: "", toleranceMin: 30, minDuration: 0 };
+
+    var form = document.createElement("div");
+    form.className = "goal-form";
+    form.innerHTML =
+      '<div class="field">' +
+        '<label>Nombre de la meta</label>' +
+        '<input type="text" class="g-label" placeholder="p. ej. Cena" value="' + escapeHtml(goal.label || "") + '">' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>La tarea debe contener el texto</label>' +
+        '<input type="text" class="g-keyword" list="taskHistory" placeholder="p. ej. cena" value="' + escapeHtml(goal.keyword || "") + '">' +
+      '</div>' +
+      '<label class="checkbox-field">' +
+        '<input type="checkbox" class="g-has-time" ' + (goal.targetTime ? "checked" : "") + '>' +
+        'Con hora objetivo' +
+      '</label>' +
+      '<div class="goal-form-row g-time-fields" style="display:' + (goal.targetTime ? "flex" : "none") + '">' +
+        '<div class="field">' +
+          '<label>Hora objetivo</label>' +
+          '<input type="time" class="g-time" value="' + (goal.targetTime || "") + '">' +
+        '</div>' +
+        '<div class="field">' +
+          '<label>Margen (± min)</label>' +
+          '<input type="number" class="g-tolerance" min="0" step="5" value="' + (goal.toleranceMin != null ? goal.toleranceMin : 30) + '">' +
+        '</div>' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>Duración mínima (min, 0 = sin mínimo)</label>' +
+        '<input type="number" class="g-min-duration" min="0" step="5" value="' + (goal.minDuration || 0) + '">' +
+      '</div>' +
+      '<div class="goal-form-actions">' +
+        (isNew ? "" : '<button type="button" class="goal-form-delete">Eliminar</button>') +
+        '<button type="button" class="goal-form-cancel">Cancelar</button>' +
+        '<button type="button" class="goal-form-save">Guardar</button>' +
+      '</div>';
+
+    el.goalFormWrap.innerHTML = "";
+    el.goalFormWrap.appendChild(form);
+
+    var hasTimeCb = form.querySelector(".g-has-time");
+    var timeFields = form.querySelector(".g-time-fields");
+    hasTimeCb.addEventListener("change", function () {
+      timeFields.style.display = hasTimeCb.checked ? "flex" : "none";
+    });
+
+    form.querySelector(".g-label").focus();
+
+    form.querySelector(".goal-form-cancel").addEventListener("click", function () {
+      el.goalFormWrap.innerHTML = "";
+    });
+
+    if (!isNew) {
+      form.querySelector(".goal-form-delete").addEventListener("click", function () {
+        if (confirm('Eliminar la meta "' + (goal.label || goal.keyword) + '"?')) {
+          deleteGoal(goal.id);
+          el.goalFormWrap.innerHTML = "";
+          renderAll();
+          showToast("Meta eliminada");
+        }
+      });
+    }
+
+    form.querySelector(".goal-form-save").addEventListener("click", function () {
+      var label = form.querySelector(".g-label").value.trim();
+      var keyword = form.querySelector(".g-keyword").value.trim();
+      var hasTime = hasTimeCb.checked;
+      var time = hasTime ? form.querySelector(".g-time").value : "";
+      var tolerance = parseInt(form.querySelector(".g-tolerance").value, 10);
+      var minDuration = parseInt(form.querySelector(".g-min-duration").value, 10);
+
+      if (!keyword) { showToast("Indica qué texto debe contener la tarea"); return; }
+      if (hasTime && !time) { showToast("Indica la hora objetivo o desmarca la casilla"); return; }
+      if (isNaN(tolerance) || tolerance < 0) tolerance = 30;
+      if (isNaN(minDuration) || minDuration < 0) minDuration = 0;
+
+      var newGoal = {
+        id: goal.id,
+        label: label || keyword,
+        keyword: keyword,
+        targetTime: hasTime ? time : "",
+        toleranceMin: hasTime ? tolerance : 30,
+        minDuration: minDuration
+      };
+
+      upsertGoal(newGoal);
+      el.goalFormWrap.innerHTML = "";
+      renderAll();
+      showToast(isNew ? "Meta creada" : "Meta actualizada");
+    });
   }
 
   // ---------------------------------------------------------------
@@ -545,6 +855,7 @@
     var isToday = state.selectedDate === todayStr();
 
     renderStats(entries, segs, agg);
+    renderGoals(entries);
     renderDial(segs, agg, isToday);
     renderRanking(agg);
     renderHeatmap();
@@ -658,6 +969,16 @@
       el.taskInput.focus();
       showToast("Añadido: " + task);
     });
+
+    el.goalsToggle.addEventListener("click", function () {
+      setGoalsExpanded(!state.goalsExpanded);
+    });
+
+    el.addGoalBtn.addEventListener("click", function () {
+      openGoalForm(null);
+    });
+
+    el.shareGoalsBtn.addEventListener("click", shareGoalsImage);
 
     el.shareDayBtn.addEventListener("click", shareDayImage);
     el.shareWeekBtn.addEventListener("click", shareWeekImage);
@@ -1199,6 +1520,138 @@
     );
   }
 
+  function buildGoalsShareCanvas() {
+    var goals = loadGoals();
+    var entries = getEntries(state.selectedDate);
+    var rows = goals.map(function (goal) {
+      return { goal: goal, result: computeGoalStatus(goal, state.selectedDate, entries) };
+    });
+
+    var W = 1080;
+    var COL_BG = "#10142a";
+    var COL_TEXT = "#edeff9";
+    var COL_MUTED = "#92a0c9";
+    var COL_MUTED2 = "#5f6a94";
+    var COL_ACCENT = "#f2b84b";
+    var COL_TEAL = "#57d9c9";
+    var COL_DANGER = "#ec6f7e";
+    var FONT_SANS = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    var FONT_MONO = '"SFMono-Regular", Menlo, Consolas, monospace';
+
+    var STATUS_COLOR = { met: COL_TEAL, partial: COL_ACCENT, missed: COL_DANGER, pending: COL_MUTED2 };
+    var STATUS_LABEL = { met: "CUMPLIDA", partial: "PARCIAL", missed: "NO CUMPLIDA", pending: "PENDIENTE" };
+
+    var headerH = 200;
+    var rowH = 140;
+    var footerH = 70;
+    var emptyH = 120;
+    var H = headerH + (rows.length ? rows.length * rowH : emptyH) + footerH;
+
+    var canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext("2d");
+
+    ctx.fillStyle = COL_BG;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(146,160,201,0.07)";
+    ctx.lineWidth = 1;
+    for (var gx = 0; gx <= W; gx += 36) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+    }
+    for (var gy = 0; gy <= H; gy += 36) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = COL_ACCENT;
+    ctx.font = "700 42px " + FONT_SANS;
+    ctx.fillText("◐ Bitácora", 64, 96);
+
+    ctx.fillStyle = COL_MUTED;
+    ctx.font = "500 28px " + FONT_SANS;
+    ctx.fillText("Metas — " + formatDateEs(state.selectedDate), 64, 138);
+
+    ctx.strokeStyle = "rgba(146,160,201,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(64, 168); ctx.lineTo(W - 64, 168); ctx.stroke();
+
+    var y = headerH;
+
+    if (rows.length === 0) {
+      ctx.fillStyle = COL_MUTED;
+      ctx.font = "500 26px " + FONT_SANS;
+      ctx.fillText("Todavía no hay metas definidas.", 64, y + 60);
+    } else {
+      rows.forEach(function (r) {
+        var color = STATUS_COLOR[r.result.status];
+
+        // left color bar
+        ctx.fillStyle = color;
+        roundRectPath(ctx, 64, y + 14, 8, rowH - 34, 4);
+        ctx.fill();
+
+        var textX = 92;
+
+        ctx.fillStyle = COL_TEXT;
+        ctx.font = "700 30px " + FONT_SANS;
+        var label = (r.goal.label || r.goal.keyword);
+        if (label.length > 34) label = label.slice(0, 33) + "…";
+        ctx.fillText(label, textX, y + 40);
+
+        ctx.textAlign = "right";
+        ctx.fillStyle = color;
+        ctx.font = "700 20px " + FONT_MONO;
+        ctx.fillText(STATUS_LABEL[r.result.status], W - 64, y + 38);
+        ctx.textAlign = "left";
+
+        ctx.fillStyle = COL_MUTED;
+        ctx.font = "500 22px " + FONT_SANS;
+        var meta = goalMetaText(r.goal);
+        if (meta.length > 62) meta = meta.slice(0, 61) + "…";
+        ctx.fillText(meta, textX, y + 72);
+
+        ctx.fillStyle = color;
+        ctx.font = "600 22px " + FONT_MONO;
+        ctx.fillText(goalResultText(r.result), textX, y + 104);
+
+        y += rowH;
+      });
+    }
+
+    ctx.fillStyle = COL_MUTED2;
+    ctx.font = "500 20px " + FONT_SANS;
+    ctx.textAlign = "center";
+    ctx.fillText("Generado con Bitácora", W / 2, H - 30);
+    ctx.textAlign = "left";
+
+    return canvas;
+  }
+
+  function shareGoalsImage() {
+    var goals = loadGoals();
+    if (goals.length === 0) {
+      showToast("Todavía no tienes metas que compartir");
+      return;
+    }
+
+    var canvas;
+    try {
+      canvas = buildGoalsShareCanvas();
+    } catch (e) {
+      console.error(e);
+      showToast("No se pudo generar la imagen");
+      return;
+    }
+
+    shareCanvasImage(
+      canvas,
+      "bitacora-metas-" + state.selectedDate,
+      "Bitácora — Metas " + state.selectedDate,
+      "Así van mis metas el " + formatDateEs(state.selectedDate).toLowerCase() + " en Bitácora."
+    );
+  }
+
   function shareWeekImage() {
     var canvas;
     try {
@@ -1233,7 +1686,8 @@
 
   function exportData() {
     var all = loadAll();
-    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 1, data: all };
+    var goals = loadGoals();
+    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 2, data: all, goals: goals };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     downloadBlob(blob, "bitacora-backup-" + todayStr() + ".json");
     showToast("Exportado " + Object.keys(all).length + " día(s)");
@@ -1250,7 +1704,9 @@
         if (!incoming || typeof incoming !== "object") throw new Error("Formato no reconocido");
 
         var dayCount = Object.keys(incoming).length;
-        if (!confirm("Se importarán " + dayCount + " día(s). Los días que ya existan localmente se sobrescribirán. ¿Continuar?")) {
+        var incomingGoals = parsed && Array.isArray(parsed.goals) ? parsed.goals : null;
+        var goalMsg = incomingGoals ? (" y " + incomingGoals.length + " meta(s)") : "";
+        if (!confirm("Se importarán " + dayCount + " día(s)" + goalMsg + ". Los días que ya existan localmente se sobrescribirán. ¿Continuar?")) {
           el.importFile.value = "";
           return;
         }
@@ -1260,6 +1716,11 @@
           if (Array.isArray(incoming[d])) all[d] = incoming[d];
         });
         saveAll(all);
+
+        if (incomingGoals) {
+          saveGoals(incomingGoals);
+        }
+
         renderAll();
         showToast("Importado correctamente");
       } catch (e) {
@@ -1273,8 +1734,9 @@
 
   function wipeAll() {
     if (!confirm("Esto borrará TODOS los días guardados en este dispositivo. Exporta antes si quieres conservarlos. ¿Seguro?")) return;
-    if (!confirm("Última confirmación: se perderán todos los datos. ¿Continuar?")) return;
+    if (!confirm("Última confirmación: se perderán todos los datos (incluidas las metas). ¿Continuar?")) return;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY_GOALS);
     state.selectedDate = todayStr();
     renderAll();
     showToast("Datos borrados");

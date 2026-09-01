@@ -157,6 +157,27 @@
     <p id="noRecords" class="empty-note">Aún no hay registros para este día.</p>
   </section>
 
+  <!-- GOALS (secundario, colapsado) -->
+  <section class="card goals-card" aria-labelledby="goalsHeading">
+    <button type="button" id="goalsToggle" class="goals-toggle-btn" aria-expanded="false" aria-controls="goalsBody">
+      <span class="goals-toggle-left">
+        <h2 id="goalsHeading" class="card-title">Metas</h2>
+        <span id="goalsSummary" class="goals-summary"></span>
+      </span>
+      <span class="goals-chevron" aria-hidden="true">▾</span>
+    </button>
+    <div id="goalsBody" class="goals-body" hidden>
+      <p class="card-sub">Objetivos de horario y/o duración para ciertas tareas (p. ej. "cenar sobre las 21:00" o "descanso a las 16:00, mín. 30m"). Se evalúan con los registros del día que estás viendo y puedes cambiarlas cuando quieras: el cambio se aplica al momento, sin tocar el historial.</p>
+      <div class="goals-body-actions">
+        <button type="button" id="addGoalBtn" class="share-btn">＋ Meta</button>
+        <button type="button" id="shareGoalsBtn" class="share-btn">⇪ Compartir</button>
+      </div>
+      <div id="goalFormWrap"></div>
+      <div id="goalsList" class="goals-list"></div>
+      <p id="noGoals" class="empty-note">Aún no has definido ninguna meta.</p>
+    </div>
+  </section>
+
 </main>
 
 <div id="settingsModal" class="modal-overlay" hidden>
