@@ -68,8 +68,13 @@
 
   function allTaskNames() {
     var all = loadAll();
+    // Solo tareas usadas en los últimos 7 días (incluyendo hoy): si una tarea
+    // lleva una semana sin usarse, deja de sugerirse automáticamente en el
+    // desplegable/autocompletado, sin necesidad de borrarla a mano.
+    var cutoff = addDays(todayStr(), -6);
     var set = {};
     Object.keys(all).forEach(function (d) {
+      if (d < cutoff) return;
       all[d].forEach(function (e) {
         if (e.task) set[e.task] = true;
       });
