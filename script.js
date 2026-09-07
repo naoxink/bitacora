@@ -3,6 +3,7 @@
 
   var STORAGE_KEY = "bitacora_dias_v1";
   var STORAGE_KEY_GOALS = "bitacora_metas_v1";
+  var STORAGE_KEY_GOAL_CHECKS = "bitacora_metas_manual_v1";
   var DAY_MIN = 1440;
 
   // ---------------------------------------------------------------
@@ -117,6 +118,58 @@
   function deleteGoal(id) {
     var goals = loadGoals().filter(function (g) { return g.id !== id; });
     saveGoals(goals);
+    purgeManualChecksForGoal(id);
+  }
+
+  function loadManualChecks() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY_GOAL_CHECKS);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Error leyendo estados manuales", e);
+      return {};
+    }
+  }
+
+  function saveManualChecks(data) {
+    try {
+      localStorage.setItem(STORAGE_KEY_GOAL_CHECKS, JSON.stringify(data));
+      return true;
+    } catch (e) {
+      console.error("Error guardando estado de meta manual", e);
+      showToast("No se pudo guardar el estado de la meta.");
+      return false;
+    }
+  }
+
+  function isManualGoalDone(goalId, dateStr) {
+    var all = loadManualChecks();
+    return !!(all[dateStr] && all[dateStr][goalId]);
+  }
+
+  function setManualGoalDone(goalId, dateStr, done) {
+    var all = loadManualChecks();
+    if (done) {
+      all[dateStr] = all[dateStr] || {};
+      all[dateStr][goalId] = true;
+    } else if (all[dateStr]) {
+      delete all[dateStr][goalId];
+      if (Object.keys(all[dateStr]).length === 0) delete all[dateStr];
+    }
+    saveManualChecks(all);
+  }
+
+  function purgeManualChecksForGoal(goalId) {
+    var all = loadManualChecks();
+    var changed = false;
+    Object.keys(all).forEach(function (d) {
+      if (all[d][goalId]) {
+        delete all[d][goalId];
+        changed = true;
+        if (Object.keys(all[d]).length === 0) delete all[d];
+      }
+    });
+    if (changed) saveManualChecks(all);
   }
 
   // ---------------------------------------------------------------
@@ -242,6 +295,13 @@
   // así, si cambias una meta, el cambio se refleja al instante en
   // cualquier día que consultes.
   function computeGoalStatus(goal, dateStr, entries) {
+    if (goal.type === "manual") {
+      var done = isManualGoalDone(goal.id, dateStr);
+      var isPast = dateStr < todayStr();
+      var status = done ? "met" : (isPast ? "missed" : "pending");
+      return { status: status, type: "manual", done: done, totalDur: 0, required: 0, found: done, matching: [] };
+    }
+
     var kw = (goal.keyword || "").trim().toLowerCase();
     var valid = entries.filter(function (e) { return toMin(e.start) < toMin(e.end); });
 
@@ -295,7 +355,7 @@
       status = "pending";
     }
 
-    return { status: status, totalDur: totalDur, required: required, found: found, matching: matching };
+    return { status: status, type: "auto", totalDur: totalDur, required: required, found: found, matching: matching };
   }
 
   var GOAL_STATUS_ICON = {
@@ -306,6 +366,9 @@
   };
 
   function goalMetaText(goal) {
+    if (goal.type === "manual") {
+      return "meta manual · se marca a mano cada día";
+    }
     var parts = [];
     parts.push('coincide con "' + (goal.keyword || "") + '"');
     if (goal.targetTime) {
@@ -319,6 +382,9 @@
   }
 
   function goalResultText(result) {
+    if (result.type === "manual") {
+      return result.done ? "marcada como hecha" : "sin marcar todavía";
+    }
     if (result.required > 0) {
       return fmtDuration(result.totalDur) + " / " + fmtDuration(result.required);
     }
@@ -471,8 +537,15 @@
       var result = computeGoalStatus(goal, state.selectedDate, entries);
       var row = document.createElement("div");
       row.className = "goal-row goal-" + result.status;
+
+      var iconHtml = goal.type === "manual"
+        ? '<button type="button" class="goal-check-btn" aria-label="' +
+            (result.done ? "Desmarcar meta" : "Marcar como hecha") + '">' +
+            (result.done ? "✓" : "○") + '</button>'
+        : '<span class="goal-status-icon" aria-hidden="true">' + GOAL_STATUS_ICON[result.status] + '</span>';
+
       row.innerHTML =
-        '<span class="goal-status-icon" aria-hidden="true">' + GOAL_STATUS_ICON[result.status] + '</span>' +
+        iconHtml +
         '<div class="goal-info">' +
         '<div class="goal-label">' + escapeHtml(goal.label || goal.keyword) + '</div>' +
         '<div class="goal-meta">' + escapeHtml(goalMetaText(goal)) + '</div>' +
@@ -482,6 +555,13 @@
         '<button type="button" class="goal-edit-btn" aria-label="Editar meta">✎</button>' +
         '<button type="button" class="goal-del-btn" aria-label="Eliminar meta">✕</button>' +
         '</div>';
+
+      if (goal.type === "manual") {
+        row.querySelector(".goal-check-btn").addEventListener("click", function () {
+          setManualGoalDone(goal.id, state.selectedDate, !result.done);
+          renderAll();
+        });
+      }
 
       row.querySelector(".goal-del-btn").addEventListener("click", function () {
         if (confirm('Eliminar la meta "' + (goal.label || goal.keyword) + '"?')) {
@@ -505,32 +585,43 @@
 
     var form = document.createElement("div");
     form.className = "goal-form";
+    var goalType = goal.type === "manual" ? "manual" : "auto";
+
     form.innerHTML =
       '<div class="field">' +
+        '<label>Tipo de meta</label>' +
+        '<div class="chip-row g-type-row">' +
+          '<button type="button" class="chip g-type-btn" data-type="auto">Automática (por tarea)</button>' +
+          '<button type="button" class="chip g-type-btn" data-type="manual">Manual (marcar a mano)</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="field">' +
         '<label>Nombre de la meta</label>' +
-        '<input type="text" class="g-label" placeholder="p. ej. Cena" value="' + escapeHtml(goal.label || "") + '">' +
+        '<input type="text" class="g-label" placeholder="p. ej. Jugar con Iku" value="' + escapeHtml(goal.label || "") + '">' +
       '</div>' +
-      '<div class="field">' +
-        '<label>La tarea debe contener el texto</label>' +
-        '<input type="text" class="g-keyword" list="taskHistory" placeholder="p. ej. cena" value="' + escapeHtml(goal.keyword || "") + '">' +
-      '</div>' +
-      '<label class="checkbox-field">' +
-        '<input type="checkbox" class="g-has-time" ' + (goal.targetTime ? "checked" : "") + '>' +
-        'Con hora objetivo' +
-      '</label>' +
-      '<div class="goal-form-row g-time-fields" style="display:' + (goal.targetTime ? "flex" : "none") + '">' +
+      '<div class="g-auto-fields" style="display:flex;flex-direction:column;gap:14px;">' +
         '<div class="field">' +
-          '<label>Hora objetivo</label>' +
-          '<input type="time" class="g-time" value="' + (goal.targetTime || "") + '">' +
+          '<label>La tarea debe contener el texto</label>' +
+          '<input type="text" class="g-keyword" list="taskHistory" placeholder="p. ej. cena" value="' + escapeHtml(goal.keyword || "") + '">' +
+        '</div>' +
+        '<label class="checkbox-field">' +
+          '<input type="checkbox" class="g-has-time" ' + (goal.targetTime ? "checked" : "") + '>' +
+          'Con hora objetivo' +
+        '</label>' +
+        '<div class="goal-form-row g-time-fields" style="display:' + (goal.targetTime ? "flex" : "none") + '">' +
+          '<div class="field">' +
+            '<label>Hora objetivo</label>' +
+            '<input type="time" class="g-time" value="' + (goal.targetTime || "") + '">' +
+          '</div>' +
+          '<div class="field">' +
+            '<label>Margen (± min)</label>' +
+            '<input type="number" class="g-tolerance" min="0" step="5" value="' + (goal.toleranceMin != null ? goal.toleranceMin : 30) + '">' +
+          '</div>' +
         '</div>' +
         '<div class="field">' +
-          '<label>Margen (± min)</label>' +
-          '<input type="number" class="g-tolerance" min="0" step="5" value="' + (goal.toleranceMin != null ? goal.toleranceMin : 30) + '">' +
+          '<label>Duración mínima (min, 0 = sin mínimo)</label>' +
+          '<input type="number" class="g-min-duration" min="0" step="5" value="' + (goal.minDuration || 0) + '">' +
         '</div>' +
-      '</div>' +
-      '<div class="field">' +
-        '<label>Duración mínima (min, 0 = sin mínimo)</label>' +
-        '<input type="number" class="g-min-duration" min="0" step="5" value="' + (goal.minDuration || 0) + '">' +
       '</div>' +
       '<div class="goal-form-actions">' +
         (isNew ? "" : '<button type="button" class="goal-form-delete">Eliminar</button>') +
@@ -540,6 +631,24 @@
 
     el.goalFormWrap.innerHTML = "";
     el.goalFormWrap.appendChild(form);
+
+    var typeBtns = form.querySelectorAll(".g-type-btn");
+    var autoFields = form.querySelector(".g-auto-fields");
+    var currentType = goalType;
+
+    function applyTypeUI() {
+      typeBtns.forEach(function (b) {
+        b.classList.toggle("chip-active", b.dataset.type === currentType);
+      });
+      autoFields.style.display = currentType === "manual" ? "none" : "flex";
+    }
+    typeBtns.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        currentType = btn.dataset.type;
+        applyTypeUI();
+      });
+    });
+    applyTypeUI();
 
     var hasTimeCb = form.querySelector(".g-has-time");
     var timeFields = form.querySelector(".g-time-fields");
@@ -566,6 +675,24 @@
 
     form.querySelector(".goal-form-save").addEventListener("click", function () {
       var label = form.querySelector(".g-label").value.trim();
+
+      if (currentType === "manual") {
+        if (!label) { showToast("Ponle un nombre a la meta"); return; }
+        upsertGoal({
+          id: goal.id,
+          type: "manual",
+          label: label,
+          keyword: "",
+          targetTime: "",
+          toleranceMin: 30,
+          minDuration: 0
+        });
+        el.goalFormWrap.innerHTML = "";
+        renderAll();
+        showToast(isNew ? "Meta creada" : "Meta actualizada");
+        return;
+      }
+
       var keyword = form.querySelector(".g-keyword").value.trim();
       var hasTime = hasTimeCb.checked;
       var time = hasTime ? form.querySelector(".g-time").value : "";
@@ -577,16 +704,15 @@
       if (isNaN(tolerance) || tolerance < 0) tolerance = 30;
       if (isNaN(minDuration) || minDuration < 0) minDuration = 0;
 
-      var newGoal = {
+      upsertGoal({
         id: goal.id,
+        type: "auto",
         label: label || keyword,
         keyword: keyword,
         targetTime: hasTime ? time : "",
         toleranceMin: hasTime ? tolerance : 30,
         minDuration: minDuration
-      };
-
-      upsertGoal(newGoal);
+      });
       el.goalFormWrap.innerHTML = "";
       renderAll();
       showToast(isNew ? "Meta creada" : "Meta actualizada");
@@ -1692,7 +1818,8 @@
   function exportData() {
     var all = loadAll();
     var goals = loadGoals();
-    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 2, data: all, goals: goals };
+    var manualChecks = loadManualChecks();
+    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 3, data: all, goals: goals, goalChecks: manualChecks };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     downloadBlob(blob, "bitacora-backup-" + todayStr() + ".json");
     showToast("Exportado " + Object.keys(all).length + " día(s)");
@@ -1710,6 +1837,7 @@
 
         var dayCount = Object.keys(incoming).length;
         var incomingGoals = parsed && Array.isArray(parsed.goals) ? parsed.goals : null;
+        var incomingGoalChecks = parsed && parsed.goalChecks && typeof parsed.goalChecks === "object" ? parsed.goalChecks : null;
         var goalMsg = incomingGoals ? (" y " + incomingGoals.length + " meta(s)") : "";
         if (!confirm("Se importarán " + dayCount + " día(s)" + goalMsg + ". Los días que ya existan localmente se sobrescribirán. ¿Continuar?")) {
           el.importFile.value = "";
@@ -1724,6 +1852,10 @@
 
         if (incomingGoals) {
           saveGoals(incomingGoals);
+        }
+
+        if (incomingGoalChecks) {
+          saveManualChecks(incomingGoalChecks);
         }
 
         renderAll();
@@ -1742,6 +1874,7 @@
     if (!confirm("Última confirmación: se perderán todos los datos (incluidas las metas). ¿Continuar?")) return;
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(STORAGE_KEY_GOALS);
+    localStorage.removeItem(STORAGE_KEY_GOAL_CHECKS);
     state.selectedDate = todayStr();
     renderAll();
     showToast("Datos borrados");
