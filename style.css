@@ -129,7 +129,7 @@ a { color: var(--accent); }
   white-space: nowrap;
 }
 
-#savedDaysSelect {
+#savedDaysSelect, #goalsHistoryRange {
   flex: 1;
   background: var(--card);
   border: 1px solid var(--card-border);
@@ -825,4 +825,146 @@ main {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* ---------- Goals history ---------- */
+
+.goals-history-card .card-title-row {
+  align-items: center;
+}
+
+.history-range-select {
+  width: auto;
+  min-width: 150px;
+  flex: 0 0 auto;
+}
+
+.goals-history-scroll {
+  overflow-x: auto;
+  padding: 4px 0 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.gh-date-label {
+    width: 26px;
+    height: 26px;
+    font-size: 10px;
+    color: var(--muted-2);
+    font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.goals-history-grid {
+  display: grid;
+  grid-template-columns: 150px repeat(var(--history-days, 7), 34px);
+  gap: 3px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.gh-header {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.gh-header:first-child {
+  justify-content: flex-start;
+}
+
+.gh-goal {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-cell {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  background: var(--bg-soft);
+  border: 1px solid rgba(146, 160, 201, 0.08);
+}
+
+.gh-cell.gh-met {
+  background: rgba(88, 196, 139, 0.18);
+  color: #58c48b;
+  border-color: rgba(88, 196, 139, 0.25);
+}
+
+.gh-cell.gh-partial {
+  background: rgba(234, 183, 82, 0.18);
+  color: #eab752;
+  border-color: rgba(234, 183, 82, 0.25);
+}
+
+.gh-cell.gh-missed {
+  background: rgba(236, 111, 126, 0.16);
+  color: #ec6f7e;
+  border-color: rgba(236, 111, 126, 0.22);
+}
+
+.gh-cell.gh-pending {
+  background: var(--bg-soft);
+  color: var(--muted-2);
+}
+
+.goals-history-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+
+.goals-history-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.gh-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.gh-swatch.gh-met {
+  background: rgba(88, 196, 139, 0.7);
+}
+
+.gh-swatch.gh-partial {
+  background: rgba(234, 183, 82, 0.7);
+}
+
+.gh-swatch.gh-missed {
+  background: rgba(236, 111, 126, 0.7);
+}
+
+.gh-swatch.gh-pending {
+  background: var(--bg-soft);
+  border: 1px solid var(--card-border);
 }

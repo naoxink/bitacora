@@ -207,6 +207,10 @@
   }
 
   function strToDate(s) {
+    if (s instanceof Date) {
+      return new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    }
+
     var parts = s.split("-").map(Number);
     return new Date(parts[0], parts[1] - 1, parts[2]);
   }
@@ -422,6 +426,9 @@
       "toast",
       "exportBtn", "importBtn", "importFile", "wipeBtn",
       "settingsBtn", "closeSettings", "settingsModal",
+      "goalsToggle", "goalsBody", "goalsSummary",
+      "addGoalBtn", "shareGoalsBtn", "goalFormWrap", "goalsList", "noGoals",
+      "goalsHistoryRange", "goalsHistoryGrid", "shareGoalsHistoryBtn"
     ].forEach(function (id) { el[id] = document.getElementById(id); });
   }
 
@@ -945,19 +952,46 @@
     });
   }
 
+  function isLatestEntry(entry) {
+    var entries = getEntries(state.selectedDate)
+      .filter(function (e) { return toMin(e.start) < toMin(e.end); })
+      .sort(function (a, b) {
+        return toMin(b.end) - toMin(a.end) || toMin(b.start) - toMin(a.start);
+      });
+
+    return entries.length && entries[0].id === entry.id;
+  }
+
   function openEditRow(row, entry) {
     var editRow = document.createElement("div");
     editRow.className = "edit-row";
+    var isLatest = isLatestEntry(entry);
+
     editRow.innerHTML =
       '<input type="text" class="e-task" value="' + escapeHtml(entry.task) + '">' +
       '<input type="time" class="e-start" value="' + entry.start + '">' +
-      '<input type="time" class="e-end" value="' + entry.end + '">' +
+      (isLatest ?
+        '<div class="time-with-now">' +
+        '<input type="time" id="editEndInput" class="e-end" value="' + entry.end + '">' +
+        '<button type="button" class="mini-btn" data-now-target="editEndInput">ahora</button>' +
+        '</div>' :
+        '<input type="time" class="e-end" value="' + entry.end + '">') +
       '<div class="edit-actions">' +
       '<button type="button" class="edit-cancel">Cancelar</button>' +
       '<button type="button" class="edit-save">Guardar</button>' +
       "</div>";
 
     row.replaceWith(editRow);
+
+    var endInput = editRow.querySelector(".e-end");
+    var nowBtn = editRow.querySelector(".mini-btn");
+
+    if (nowBtn) {
+      nowBtn.addEventListener("click", function () {
+        endInput.value = nowRounded5();
+        el.startInput.value = endInput.value;
+      });
+    }
 
     editRow.querySelector(".edit-cancel").addEventListener("click", function () {
       renderAll();
@@ -987,6 +1021,7 @@
 
     renderStats(entries, segs, agg);
     renderGoals(entries);
+    renderGoalsHistory();
     renderDial(segs, agg, isToday);
     renderRanking(agg);
     renderHeatmap();
@@ -1110,6 +1145,7 @@
     });
 
     el.shareGoalsBtn.addEventListener("click", shareGoalsImage);
+    el.shareGoalsHistoryBtn.addEventListener("click", shareGoalsHistoryImage);
 
     el.shareDayBtn.addEventListener("click", shareDayImage);
     el.shareWeekBtn.addEventListener("click", shareWeekImage);
@@ -1117,6 +1153,7 @@
     el.importBtn.addEventListener("click", function () { el.importFile.click(); });
     el.importFile.addEventListener("change", handleImport);
     el.wipeBtn.addEventListener("click", wipeAll);
+    el.goalsHistoryRange.addEventListener("change", renderGoalsHistory);
 
     el.settingsBtn.addEventListener("click", function () {
       el.settingsModal.hidden = false;
@@ -1617,7 +1654,12 @@
         return;
       }
 
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      var shouldUseNativeShare = !!(
+        navigator.share &&
+        (navigator.maxTouchPoints > 0 || /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent))
+      );
+
+      if (shouldUseNativeShare && navigator.canShare && navigator.canShare({ files: [file] })) {
         navigator.share({
           files: [file],
           title: shareTitle,
@@ -1628,7 +1670,7 @@
           }
         });
       } else {
-        fallbackToDownload("Tu navegador no admite compartir imágenes: descargada");
+        fallbackToDownload("Imagen descargada");
       }
     }, "image/png");
   }
@@ -1783,6 +1825,172 @@
     );
   }
 
+  function buildGoalsHistoryShareCanvas() {
+    var goals = loadGoals();
+    if (goals.length === 0) {
+      throw new Error("No goals");
+    }
+
+    var range = el.goalsHistoryRange.value;
+    var days = getGoalHistoryDays(range);
+    days.reverse();
+
+    var COL_BG = "#10142a";
+    var COL_TEXT = "#edeff9";
+    var COL_MUTED = "#92a0c9";
+    var COL_MUTED2 = "#5f6a94";
+    var COL_ACCENT = "#f2b84b";
+    var COL_TEAL = "#57d9c9";
+    var COL_DANGER = "#ec6f7e";
+    var FONT_SANS = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    var FONT_MONO = '"SFMono-Regular", Menlo, Consolas, monospace';
+
+    var STATUS_BG = {
+      met: "rgba(87, 217, 201, 0.20)",
+      partial: "rgba(242, 184, 75, 0.20)",
+      missed: "rgba(236, 111, 126, 0.18)",
+      pending: "rgba(146, 160, 201, 0.08)"
+    };
+
+    var STATUS_TEXT = {
+      met: COL_TEAL,
+      partial: COL_ACCENT,
+      missed: COL_DANGER,
+      pending: COL_MUTED2
+    };
+
+    var rangeLabel = {
+      "7": "Últimos 7 días",
+      "14": "Últimos 14 días",
+      "30": "Último mes",
+      "all": "Desde el inicio"
+    }[range] || "Historial de metas";
+
+    var leftColW = 180;
+    var cellW = 30;
+    var cellGap = 4;
+    var rowH = 38;
+    var marginX = 64;
+    var gridTop = 210;
+    var W = Math.max(1020, marginX * 2 + leftColW + days.length * (cellW + cellGap) + 8);
+    var H = 200 + goals.length * rowH + 160;
+
+    var canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext("2d");
+
+    ctx.fillStyle = COL_BG;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(146,160,201,0.07)";
+    ctx.lineWidth = 1;
+    for (var gx = 0; gx <= W; gx += 36) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+    }
+    for (var gy = 0; gy <= H; gy += 36) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = COL_ACCENT;
+    ctx.font = "700 42px " + FONT_SANS;
+    ctx.fillText("◐ Bitácora", 64, 96);
+
+    ctx.fillStyle = COL_MUTED;
+    ctx.font = "500 26px " + FONT_SANS;
+    ctx.fillText(rangeLabel + " · hasta " + formatDateEs(state.selectedDate), 64, 136);
+
+    ctx.strokeStyle = "rgba(146,160,201,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(64, 160); ctx.lineTo(W - 64, 160); ctx.stroke();
+
+    ctx.fillStyle = COL_TEXT;
+    ctx.font = "700 24px " + FONT_SANS;
+    ctx.fillText("Metas", marginX, gridTop - 20);
+
+    var daysStartX = marginX + leftColW;
+
+    ctx.fillStyle = COL_MUTED;
+    ctx.font = "700 10px " + FONT_MONO;
+    ctx.textAlign = "center";
+    days.forEach(function (dateStr, idx) {
+      var x = daysStartX + idx * (cellW + cellGap) + cellW / 2;
+      var day = dateStr.slice(8, 10);
+      var month = dateStr.slice(5, 7);
+      ctx.fillText(day, x, gridTop - 12);
+      ctx.fillStyle = COL_MUTED2;
+      ctx.fillText("·", x, gridTop - 1);
+      ctx.fillStyle = COL_MUTED;
+      ctx.fillText(month, x, gridTop + 11);
+    });
+    ctx.textAlign = "left";
+
+    goals.forEach(function (goal, goalIdx) {
+      var y = gridTop + 22 + goalIdx * rowH;
+      var label = goal.label || goal.keyword || "Meta";
+      if (label.length > 22) label = label.slice(0, 21) + "…";
+
+      ctx.fillStyle = COL_TEXT;
+      ctx.font = "600 18px " + FONT_SANS;
+      ctx.fillText(label, marginX, y + 14);
+
+      days.forEach(function (dateStr, idx) {
+        var x = daysStartX + idx * (cellW + cellGap);
+        var result = computeGoalStatus(goal, dateStr, getEntries(dateStr));
+
+        ctx.fillStyle = STATUS_BG[result.status];
+        roundRectPath(ctx, x, y, cellW, cellW, 6);
+        ctx.fill();
+
+        ctx.fillStyle = STATUS_TEXT[result.status];
+        ctx.font = "700 15px " + FONT_MONO;
+        ctx.textAlign = "center";
+        ctx.fillText(GOAL_STATUS_ICON[result.status], x + cellW / 2, y + 19);
+        ctx.textAlign = "left";
+      });
+    });
+
+    ctx.fillStyle = COL_MUTED2;
+    ctx.font = "500 20px " + FONT_SANS;
+    ctx.textAlign = "center";
+    ctx.fillText("Generado con Bitácora", W / 2, H - 38);
+    ctx.textAlign = "left";
+
+    return canvas;
+  }
+
+  function shareGoalsHistoryImage() {
+    var goals = loadGoals();
+    if (goals.length === 0) {
+      showToast("Todavía no tienes metas que compartir");
+      return;
+    }
+
+    var canvas;
+    try {
+      canvas = buildGoalsHistoryShareCanvas();
+    } catch (e) {
+      console.error(e);
+      showToast("No se pudo generar la imagen");
+      return;
+    }
+
+    var range = el.goalsHistoryRange.value;
+    var rangeLabel = {
+      "7": "7-dias",
+      "14": "14-dias",
+      "30": "30-dias",
+      "all": "desde-el-inicio"
+    }[range] || "historial";
+
+    shareCanvasImage(
+      canvas,
+      "bitacora-historial-metas-" + rangeLabel,
+      "Bitácora — Historial de metas",
+      "Mi historial de metas en Bitácora para " + (rangeLabel === "desde-el-inicio" ? "desde el inicio" : "los últimos " + rangeLabel.replace("-dias", " días").replace("-", " ")) + "."
+    );
+  }
+
   function shareWeekImage() {
     var canvas;
     try {
@@ -1878,6 +2086,111 @@
     state.selectedDate = todayStr();
     renderAll();
     showToast("Datos borrados");
+  }
+
+  function getGoalHistoryDays(range) {
+    var end = strToDate(todayStr());
+    var days = [];
+
+    var count;
+
+    if (range === "all") {
+      var all = loadAll();
+      var manual = loadManualChecks();
+
+      var dates = Object.keys(all).concat(Object.keys(manual));
+
+      if (!dates.length) {
+        return [todayStr()];
+      }
+
+      dates.sort();
+
+      var start = strToDate(dates[0]);
+
+      while (start <= end) {
+        days.push(dateToStr(start));
+        start.setDate(start.getDate() + 1);
+      }
+
+      return days;
+    }
+
+    count = Number(range) || 7;
+
+    for (var i = count - 1; i >= 0; i--) {
+      var d = new Date(
+        end.getFullYear(),
+        end.getMonth(),
+        end.getDate() - i
+      );
+
+      days.push(dateToStr(d));
+    }
+
+    return days;
+  }
+
+  function renderGoalsHistory() {
+      var grid = el.goalsHistoryGrid;
+      grid.innerHTML = "";
+
+      var goals = loadGoals();
+
+      if (goals.length === 0) {
+          grid.innerHTML = '<p class="empty-note">Aún no has definido ninguna meta.</p>';
+          return;
+      }
+
+      var range = el.goalsHistoryRange.value;
+      var days = getGoalHistoryDays(range);
+
+      // Invertir el orden de los días para que el más reciente esté a la derecha
+      days.reverse();
+
+      grid.style.setProperty("--history-days", days.length);
+
+      // Esquina superior izquierda
+      grid.appendChild(makeDiv("gh-corner", ""));
+
+      // Fechas
+      days.forEach(function (dateStr) {
+          var label = makeDiv("gh-date-label", dateStr.slice(5).split("-").reverse().join("/"));
+          label.title = dateStr;
+          grid.appendChild(label);
+      });
+
+      // Una fila por meta
+      goals.forEach(function (goal) {
+          var label = document.createElement("div");
+          label.className = "gh-goal-label";
+          label.textContent = goal.label || goal.keyword;
+          grid.appendChild(label);
+
+          days.forEach(function (dateStr) {
+              var result = computeGoalStatus(
+                  goal,
+                  dateStr,
+                  getEntries(dateStr)
+              );
+
+              var cell = document.createElement("div");
+              cell.className = "gh-cell gh-" + result.status;
+
+              cell.textContent = GOAL_STATUS_ICON[result.status];
+
+              cell.title =
+                  dateStr +
+                  " · " +
+                  (goal.label || goal.keyword) +
+                  " · " +
+                  GOAL_STATUS_LABEL[result.status] +
+                  " · " +
+                  goalResultText(result);
+
+              grid.appendChild(cell);
+          });
+      });
   }
 
   // ---------------------------------------------------------------

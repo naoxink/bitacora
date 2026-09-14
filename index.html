@@ -178,6 +178,40 @@
     </div>
   </section>
 
+  <!-- GOALS HISTORY -->
+  <section class="card goals-history-card" aria-labelledby="goalsHistoryHeading">
+    <div class="card-title-row">
+      <h2 id="goalsHistoryHeading" class="card-title">Historial de metas</h2>
+
+      <div class="card-title-row">
+        <select id="goalsHistoryRange" class="history-range-select">
+          <option value="7">Últimos 7 días</option>
+          <option value="14" selected>Últimos 14 días</option>
+          <option value="30">Último mes</option>
+          <option value="all">Desde el inicio</option>
+        </select>
+        <button type="button" id="shareGoalsHistoryBtn" class="share-btn" aria-label="Compartir historial de metas">
+          <span aria-hidden="true">⇪</span> Compartir
+        </button>
+      </div>
+    </div>
+
+    <p class="card-sub">
+      Cada celda muestra si cumpliste la meta ese día.
+    </p>
+
+    <div class="goals-history-scroll">
+      <div id="goalsHistoryGrid" class="goals-history-grid"></div>
+    </div>
+
+    <div class="goals-history-legend">
+      <span><i class="gh-swatch gh-met"></i> Cumplida</span>
+      <span><i class="gh-swatch gh-partial"></i> Parcial</span>
+      <span><i class="gh-swatch gh-missed"></i> No cumplida</span>
+      <span><i class="gh-swatch gh-pending"></i> Pendiente</span>
+    </div>
+  </section>
+
 </main>
 
 <div id="settingsModal" class="modal-overlay" hidden>
