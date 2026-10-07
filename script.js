@@ -269,19 +269,144 @@
   // Colors
   // ---------------------------------------------------------------
   var UNKNOWN_COLOR = "hsl(228, 12%, 42%)";
+  var STORAGE_KEY_COLORS = "bitacora_colores_v1";
+  var colorMap = null; // { "nombre en minúsculas": índice de color }
 
-  function hashHue(str) {
-    var hash = 0;
-    for (var i = 0; i < str.length; i++) {
-      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  function colorKey(task) {
+    return String(task).trim().toLowerCase();
+  }
+
+  function loadColorMap() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY_COLORS);
+      colorMap = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      colorMap = {};
     }
-    return Math.abs(hash) % 360;
+  }
+
+  function saveColorMap() {
+    try {
+      localStorage.setItem(STORAGE_KEY_COLORS, JSON.stringify(colorMap));
+    } catch (e) {
+      console.error("Error guardando colores", e);
+    }
+  }
+
+  function nextColorIndex() {
+    var used = {};
+    Object.keys(colorMap).forEach(function (k) { used[colorMap[k]] = true; });
+    var i = 0;
+    while (used[i]) i++;
+    return i;
+  }
+
+  // Ángulo áureo: cada color nuevo queda lo más lejos posible de los anteriores.
+  // Cada 8 colores se cambia el brillo/saturación para seguir diferenciando.
+  function colorFromIndex(i) {
+    var hue = Math.round((210 + i * 137.508) % 360);
+    var tier = Math.floor(i / 8) % 3;
+    var light = [58, 72, 46][tier];
+    var sat = [68, 60, 72][tier];
+    return "hsl(" + hue + ", " + sat + "%, " + light + "%)";
   }
 
   function taskColor(task) {
     if (task === "Desconocido") return UNKNOWN_COLOR;
-    var hue = hashHue(task);
-    return "hsl(" + hue + ", 62%, 58%)";
+    if (!colorMap) loadColorMap();
+    var key = colorKey(task);
+    if (colorMap[key] === undefined) {
+      colorMap[key] = nextColorIndex();
+      saveColorMap();
+    }
+    var v = colorMap[key];
+    return typeof v === "string" ? v : colorFromIndex(v);
+  }
+
+  // Asigna color a todas las tareas ya guardadas, en orden cronológico,
+  // para que el reparto sea estable y no dependa del orden de renderizado.
+  function seedColorsFromHistory() {
+    if (!colorMap) loadColorMap();
+    var all = loadAll();
+    var items = [];
+    Object.keys(all).sort().forEach(function (d) {
+      all[d].slice().sort(function (a, b) { return toMin(a.start) - toMin(b.start); })
+        .forEach(function (e) { if (e.task) items.push(e.task); });
+    });
+    var changed = false;
+    items.forEach(function (t) {
+      var k = colorKey(t);
+      if (colorMap[k] === undefined) {
+        colorMap[k] = nextColorIndex();
+        changed = true;
+      }
+    });
+    if (changed) saveColorMap();
+  }
+
+  // Convierte cualquier color CSS (hsl, etc.) a #rrggbb para <input type="color">
+  function cssToHex(css) {
+    var c = document.createElement("canvas").getContext("2d");
+    c.fillStyle = "#000000";
+    c.fillStyle = css;
+    return c.fillStyle;
+  }
+
+  function setTaskColor(key, hex) {
+    if (!colorMap) loadColorMap();
+    colorMap[key] = hex;
+    saveColorMap();
+  }
+
+  function resetTaskColor(key) {
+    if (!colorMap) loadColorMap();
+    delete colorMap[key];
+    colorMap[key] = nextColorIndex();
+    saveColorMap();
+  }
+
+  function renderColorsEditor() {
+    seedColorsFromHistory();
+
+    // Nombre original (con mayúsculas) a partir del historial más reciente
+    var names = {};
+    var all = loadAll();
+    Object.keys(all).sort().forEach(function (d) {
+      all[d].forEach(function (e) { if (e.task) names[colorKey(e.task)] = e.task; });
+    });
+
+    var keys = Object.keys(colorMap).sort(function (a, b) {
+      return (names[a] || a).localeCompare(names[b] || b, "es");
+    });
+
+    el.colorsList.innerHTML = "";
+    el.noColors.style.display = keys.length ? "none" : "block";
+
+    keys.forEach(function (key) {
+      var name = names[key] || key;
+      var isCustom = typeof colorMap[key] === "string";
+      var row = document.createElement("div");
+      row.className = "color-row";
+      row.innerHTML =
+        '<input type="color" class="color-input" value="' + cssToHex(taskColor(name)) + '" aria-label="Color de ' + escapeHtml(name) + '">' +
+        '<span class="color-name">' + escapeHtml(name) + '</span>' +
+        '<span class="color-tag">' + (isCustom ? "manual" : "auto") + '</span>' +
+        '<button type="button" class="color-reset">Auto</button>';
+
+      var input = row.querySelector(".color-input");
+      input.addEventListener("change", function () {
+        setTaskColor(key, input.value);
+        renderAll();
+        renderColorsEditor();
+      });
+      row.querySelector(".color-reset").addEventListener("click", function () {
+        resetTaskColor(key);
+        renderAll();
+        renderColorsEditor();
+        showToast("Color restablecido");
+      });
+      el.colorsList.appendChild(row);
+    });
   }
 
   // ---------------------------------------------------------------
@@ -428,7 +553,8 @@
       "settingsBtn", "closeSettings", "settingsModal",
       "goalsToggle", "goalsBody", "goalsSummary",
       "addGoalBtn", "shareGoalsBtn", "goalFormWrap", "goalsList", "noGoals",
-      "goalsHistoryRange", "goalsHistoryGrid", "shareGoalsHistoryBtn"
+      "goalsHistoryRange", "goalsHistoryGrid", "shareGoalsHistoryBtn",
+      "colorsBtn", "colorsModal", "closeColors", "colorsList", "noColors",
     ].forEach(function (id) { el[id] = document.getElementById(id); });
   }
 
@@ -1165,6 +1291,18 @@
 
     el.settingsModal.addEventListener("click", function (ev) {
       if (ev.target === el.settingsModal) el.settingsModal.hidden = true;
+    });
+
+    el.colorsBtn.addEventListener("click", function () {
+      el.settingsModal.hidden = true;
+      renderColorsEditor();
+      el.colorsModal.hidden = false;
+    });
+    el.closeColors.addEventListener("click", function () {
+      el.colorsModal.hidden = true;
+    });
+    el.colorsModal.addEventListener("click", function (ev) {
+      if (ev.target === el.colorsModal) el.colorsModal.hidden = true;
     });
   }
 
@@ -2027,7 +2165,7 @@
     var all = loadAll();
     var goals = loadGoals();
     var manualChecks = loadManualChecks();
-    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 3, data: all, goals: goals, goalChecks: manualChecks };
+    var payload = { exportedAt: new Date().toISOString(), app: "bitacora", version: 4, data: all, goals: goals, goalChecks: manualChecks, colors: colorMap || {} };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     downloadBlob(blob, "bitacora-backup-" + todayStr() + ".json");
     showToast("Exportado " + Object.keys(all).length + " día(s)");
@@ -2058,6 +2196,22 @@
         });
         saveAll(all);
 
+        if (parsed && parsed.colors && typeof parsed.colors === "object") {
+          if (!colorMap) loadColorMap();
+          var usedIdx = {};
+          Object.keys(colorMap).forEach(function (k) { usedIdx[colorMap[k]] = true; });
+          Object.keys(parsed.colors).forEach(function (k) {
+            if (colorMap[k] !== undefined) return;
+            var idx = parsed.colors[k];
+            if (typeof idx === "string") { colorMap[k] = idx; return; }
+            if (typeof idx !== "number" || usedIdx[idx]) idx = nextColorIndex();
+            colorMap[k] = idx;
+            usedIdx[idx] = true;
+          });
+          saveColorMap();
+        }
+        seedColorsFromHistory();
+
         if (incomingGoals) {
           saveGoals(incomingGoals);
         }
@@ -2083,6 +2237,8 @@
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(STORAGE_KEY_GOALS);
     localStorage.removeItem(STORAGE_KEY_GOAL_CHECKS);
+    localStorage.removeItem(STORAGE_KEY_COLORS);
+    colorMap = {};
     state.selectedDate = todayStr();
     renderAll();
     showToast("Datos borrados");
@@ -2198,6 +2354,7 @@
   // ---------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", function () {
     cacheDom();
+    seedColorsFromHistory();
     wireEvents();
     renderAll();
   });

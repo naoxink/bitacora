@@ -222,11 +222,25 @@
       <button id="closeSettings" class="icon-btn" aria-label="Cerrar">✕</button>
     </div>
     <div class="modal-body">
+      <button id="colorsBtn" class="footer-btn">Colores de tareas</button>
       <button id="exportBtn" class="footer-btn">Exportar todo (JSON)</button>
       <button id="importBtn" class="footer-btn">Importar copia</button>
       <input type="file" id="importFile" accept="application/json" hidden>
       <button id="wipeBtn" class="footer-btn footer-btn-danger">Borrar todos los datos</button>
     </div>
+  </div>
+</div>
+
+<div id="colorsModal" class="modal-overlay" hidden>
+  <div class="modal-sheet modal-sheet-tall" role="dialog" aria-labelledby="colorsHeading">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h2 id="colorsHeading" class="card-title">Colores de tareas</h2>
+      <button id="closeColors" class="icon-btn" aria-label="Cerrar">✕</button>
+    </div>
+    <p class="card-sub">Cada tarea conserva su color. Toca el cuadro para elegir otro; "Auto" le asigna el siguiente color libre de la paleta.</p>
+    <div id="colorsList" class="colors-list"></div>
+    <p id="noColors" class="empty-note">Aún no hay tareas con color.</p>
   </div>
 </div>
 
